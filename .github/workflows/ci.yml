@@ -9,7 +9,7 @@ on:
 jobs:
 
   ci:
-    name: Main Process
+    name: ci
     runs-on: ubuntu-latest
     env:
       GO_VERSION: 1.16

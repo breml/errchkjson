@@ -13,14 +13,15 @@ import (
 
 func TestDefault(t *testing.T) {
 	testdata := analysistest.TestData()
-	analysistest.Run(t, testdata, errchkjson.Analyzer, "standard")
+	analysistest.Run(t, testdata, errchkjson.NewAnalyzer(), "standard")
 }
 
-func TestNoSafeFlag(t *testing.T) {
-	err := errchkjson.Analyzer.Flags.Set("omit-safe", "true")
+func TestOmitSafeFlag(t *testing.T) {
+	errchkjson := errchkjson.NewAnalyzer()
+	err := errchkjson.Flags.Set("omit-safe", "true")
 	if err != nil {
-		t.Fatalf("error setting 'no-safe' command line flag: %v", err)
+		t.Fatalf("error setting 'omit-safe' command line flag: %v", err)
 	}
 	testdata := analysistest.TestData()
-	analysistest.Run(t, testdata, errchkjson.Analyzer, "nosafe")
+	analysistest.Run(t, testdata, errchkjson, "nosafe")
 }

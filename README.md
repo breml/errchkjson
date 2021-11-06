@@ -4,6 +4,52 @@
 
 Checks types passed to the json encoding functions. Reports unsupported types and reports occations, where the check for the returned error can be omited.
 
+Consider this [http.Handler](https://pkg.go.dev/net/http#Handler):
+
+```Go
+func JSONHelloWorld(w http.ResponseWriter, r *http.Request) {
+	response := struct {
+		Message string
+		Code    int
+	}{
+		Message: "Hello World",
+		Code:    200,
+	}
+
+	body, err := json.Marshal(response)
+	if err != nil {
+		panic(err) // unreachable, because json encoding of a struct with just a string and an int will never return an error.
+	}
+
+	w.Write(body)
+}
+```
+
+Because the `panic` is not possible to happen, one might refactor the code like this:
+
+```Go
+func JSONHelloWorld(w http.ResponseWriter, r *http.Request) {
+	response := struct {
+		Message string
+		Code    int
+	}{
+		Message: "Hello World",
+		Code:    200,
+	}
+
+	body, _ := json.Marshal(response)
+
+	w.Write(body)
+}
+```
+
+This is ok, as long as the struct is not altered in such a way, that could potentially lead
+to `json.Marshal` returning an error.
+
+`errchkjson` allows you to lint your code such that the above error returned from `json.Marshal`
+can be omitted while still staying save, because as soon as an unsafe type is added to the
+response type, the linter will warn you.
+
 ## Installation
 
 Download `errchkjson` from the [releases](https://github.com/breml/errchkjson/releases) or get the latest version from source with:

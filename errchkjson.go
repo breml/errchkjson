@@ -3,6 +3,7 @@
 package errchkjson
 
 import (
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -13,19 +14,27 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
-var Analyzer = &analysis.Analyzer{
-	Name: "errchkjson",
-	Doc:  "Checks types passed to the json encoding functions. Reports unsupported types and reports occations, where the check for the returned error can be omited.",
-	Run:  run,
+type errchkjson struct {
+	omitSafe bool // -omit-safe flag
 }
 
-var omitSafe bool // -omit-safe flag
+// NewAnalyzer returns a new errchkjson analyzer.
+func NewAnalyzer() *analysis.Analyzer {
+	errchkjson := &errchkjson{}
 
-func init() {
-	Analyzer.Flags.BoolVar(&omitSafe, "omit-safe", false, "if omit-safe is true, checking of safe returns is omitted")
+	a := &analysis.Analyzer{
+		Name: "errchkjson",
+		Doc:  "Checks types passed to the json encoding functions. Reports unsupported types and reports occations, where the check for the returned error can be omitted.",
+		Run:  errchkjson.run,
+	}
+
+	a.Flags.Init("errchkjson", flag.ExitOnError)
+	a.Flags.BoolVar(&errchkjson.omitSafe, "omit-safe", false, "if omit-safe is true, checking of safe returns is omitted")
+
+	return a
 }
 
-func run(pass *analysis.Pass) (interface{}, error) {
+func (e *errchkjson) run(pass *analysis.Pass) (interface{}, error) {
 	for _, file := range pass.Files {
 		ast.Inspect(file, func(n ast.Node) bool {
 			if n == nil {
@@ -33,7 +42,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			}
 
 			ce, ok := n.(*ast.CallExpr)
-			if ok && omitSafe {
+			if ok && e.omitSafe {
 				fn, _ := typeutil.Callee(pass.TypesInfo, ce).(*types.Func)
 				if fn == nil {
 					return true
@@ -64,9 +73,9 @@ func run(pass *analysis.Pass) (interface{}, error) {
 
 			switch fn.FullName() {
 			case "encoding/json.Marshal", "encoding/json.MarshalIndent":
-				handleJSONMarshal(pass, n, fn.FullName(), 1)
+				e.handleJSONMarshal(pass, n, fn.FullName(), 1)
 			case "(*encoding/json.Encoder).Encode":
-				handleJSONMarshal(pass, n, fn.FullName(), 0)
+				e.handleJSONMarshal(pass, n, fn.FullName(), 0)
 			default:
 				return true
 			}
@@ -77,7 +86,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
-func handleJSONMarshal(pass *analysis.Pass, n ast.Node, fnName string, errPos int) {
+func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, n ast.Node, fnName string, errPos int) {
 	as := n.(*ast.AssignStmt)
 	ce := as.Rhs[0].(*ast.CallExpr)
 
@@ -111,11 +120,11 @@ func handleJSONMarshal(pass *analysis.Pass, n ast.Node, fnName string, errPos in
 			pass.Reportf(n.Pos(), "Error return value of `%s` is not checked: %v", fnName, err)
 		}
 	}
-	if err == nil && !blankIdentifier && !omitSafe {
+	if err == nil && !blankIdentifier && !e.omitSafe {
 		pass.Reportf(n.Pos(), "Error return value of `%s` is checked but passed argument is safe", fnName)
 	}
 	// Report an error, if err for json.Marshal is not checked and save types are omitted
-	if err == nil && blankIdentifier && omitSafe {
+	if err == nil && blankIdentifier && e.omitSafe {
 		pass.Reportf(n.Pos(), "Error return value of `%s` is not checked", fnName)
 	}
 }

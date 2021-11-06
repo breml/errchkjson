@@ -7,5 +7,5 @@ import (
 )
 
 func main() {
-	singlechecker.Main(errchkjson.Analyzer)
+	singlechecker.Main(errchkjson.NewAnalyzer())
 }
