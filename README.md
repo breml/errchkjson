@@ -1,6 +1,6 @@
 # errchkjson
 
-[![Test Status](https://github.com/breml/errchkjson/workflows/ci/badge.svg)](https://github.com/breml/errchkjson/actions?query=workflow%3Aci) [![Go Report Card](https://goreportcard.com/badge/github.com/breml/errchkjson)](https://goreportcard.com/report/github.com/breml/errchkjson) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Test Status](https://github.com/breml/errchkjson/actions/workflows/ci.yml/badge.svg)](https://github.com/breml/errchkjson/actions/workflows/ci.yml) [![Go Report Card](https://goreportcard.com/badge/github.com/breml/errchkjson)](https://goreportcard.com/report/github.com/breml/errchkjson) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Checks types passed to the json encoding functions. Reports unsupported types and reports occations, where the check for the returned error can be omited.
 
