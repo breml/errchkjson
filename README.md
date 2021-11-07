@@ -47,7 +47,7 @@ This is ok, as long as the struct is not altered in such a way, that could poten
 to `json.Marshal` returning an error.
 
 `errchkjson` allows you to lint your code such that the above error returned from `json.Marshal`
-can be omitted while still staying save, because as soon as an unsafe type is added to the
+can be omitted while still staying safe, because as soon as an unsafe type is added to the
 response type, the linter will warn you.
 
 ## Installation

@@ -1,5 +1,5 @@
 // Package errchkjson defines an Analyzer that finds places, where it is
-// save to omit checking the error returned from json.Marshal.
+// safe to omit checking the error returned from json.Marshal.
 package errchkjson
 
 import (
@@ -123,7 +123,7 @@ func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, n ast.Node, fnName s
 	if err == nil && !blankIdentifier && !e.omitSafe {
 		pass.Reportf(n.Pos(), "Error return value of `%s` is checked but passed argument is safe", fnName)
 	}
-	// Report an error, if err for json.Marshal is not checked and save types are omitted
+	// Report an error, if err for json.Marshal is not checked and safe types are omitted
 	if err == nil && blankIdentifier && e.omitSafe {
 		pass.Reportf(n.Pos(), "Error return value of `%s` is not checked", fnName)
 	}
