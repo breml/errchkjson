@@ -16,9 +16,9 @@ func (mt marshalText) MarshalText() ([]byte, error) {
 
 var _ encoding.TextMarshaler = marshalText(struct{}{})
 
-// JSONMarshalSaveTypes contains a multitude of test cases to marshal different combinations of types to JSON,
-// that are save, that is, they will never return an error, if these types are marshaled to JSON.
-func JSONMarshalSaveTypes() {
+// JSONMarshalSafeTypes contains a multitude of test cases to marshal different combinations of types to JSON,
+// that are safe, that is, they will never return an error, if these types are marshaled to JSON.
+func JSONMarshalSafeTypes() {
 	var err error
 
 	_, _ = json.Marshal(nil)   // nil is safe
@@ -249,37 +249,39 @@ func JSONMarshalSaveTypes() {
 	_ = err
 }
 
-type structKey struct{ id int }
-type ExportedUnsafeAndInvalidStruct struct { // unsafe unexported but ommited
-	F64                  float64
-	F64Ptr               *float64
-	F64Slice             []float64
-	F64Array             [10]float64
-	MapStrF64            map[string]float64
-	MapEIStr             map[interface{}]string
-	Number               json.Number
-	NumberPtr            *json.Number
-	NumberSlice          []json.Number
-	MapNumberStr         map[json.Number]string
-	Ei                   interface{}
-	Stringer             fmt.Stringer
-	Mt                   marshalText
-	MapMarshalTextString map[marshalText]string
+type (
+	structKey                      struct{ id int }
+	ExportedUnsafeAndInvalidStruct struct { // unsafe unexported but omitted
+		F64                  float64
+		F64Ptr               *float64
+		F64Slice             []float64
+		F64Array             [10]float64
+		MapStrF64            map[string]float64
+		MapEIStr             map[interface{}]string
+		Number               json.Number
+		NumberPtr            *json.Number
+		NumberSlice          []json.Number
+		MapNumberStr         map[json.Number]string
+		Ei                   interface{}
+		Stringer             fmt.Stringer
+		Mt                   marshalText
+		MapMarshalTextString map[marshalText]string
 
-	C128         complex128
-	C128Ptr      *complex128
-	C128Slice    []complex128
-	C128Array    [10]complex128
-	MapBoolStr   map[bool]string
-	MapF64Str    map[float64]string
-	F            func()
-	Ch           chan struct{}
-	UnsafePtr    unsafe.Pointer
-	MapStructStr map[structKey]string
-}
+		C128         complex128
+		C128Ptr      *complex128
+		C128Slice    []complex128
+		C128Array    [10]complex128
+		MapBoolStr   map[bool]string
+		MapF64Str    map[float64]string
+		F            func()
+		Ch           chan struct{}
+		UnsafePtr    unsafe.Pointer
+		MapStructStr map[structKey]string
+	}
+)
 
-// JSONMarshalSaveStructWithUnexportedFields contains a struct with unexported, unsafe fields.
-func JSONMarshalSaveStructWithUnexportedFields() {
+// JSONMarshalSafeStructWithUnexportedFields contains a struct with unexported, unsafe fields.
+func JSONMarshalSafeStructWithUnexportedFields() {
 	var err error
 
 	var unexportedInStruct struct {
@@ -343,49 +345,49 @@ func JSONMarshalSaveStructWithUnexportedFields() {
 	_ = err
 }
 
-// JSONMarshalSaveStructWithOmittedFields contains a struct with omitted, unsafe fields.
-func JSONMarshalSaveStructWithOmittedFields() {
+// JSONMarshalSafeStructWithOmittedFields contains a struct with omitted, unsafe fields.
+func JSONMarshalSafeStructWithOmittedFields() {
 	var err error
 
-	var ommitInStruct struct {
+	var omitInStruct struct {
 		Bool bool // safe exported
 
-		F64                  float64                         `json:"-"` // unsafe exported but ommited
-		F64Ptr               *float64                        `json:"-"` // unsafe exported but ommited
-		F64Slice             []float64                       `json:"-"` // unsafe exported but ommited
-		F64Array             [10]float64                     `json:"-"` // unsafe exported but ommited
-		MapStrF64            map[string]float64              `json:"-"` // unsafe exported but ommited
-		MapEIStr             map[interface{}]string          `json:"-"` // unsafe exported but ommited
-		Number               json.Number                     `json:"-"` // unsafe exported but ommited
-		NumberPtr            *json.Number                    `json:"-"` // unsafe exported but ommited
-		NumberSlice          []json.Number                   `json:"-"` // unsafe exported but ommited
-		MapNumberStr         map[json.Number]string          `json:"-"` // unsafe exported but ommited
-		Ei                   interface{}                     `json:"-"` // unsafe exported but ommited
-		Stringer             fmt.Stringer                    `json:"-"` // unsafe exported but ommited
-		Mt                   marshalText                     `json:"-"` // unsafe exported but ommited
-		MapMarshalTextString map[marshalText]string          `json:"-"` // unsafe exported but ommited
-		ExportedStruct       ExportedUnsafeAndInvalidStruct  `json:"-"` // unsafe exported but ommited
-		ExportedStructPtr    *ExportedUnsafeAndInvalidStruct `json:"-"` // unsafe exported but ommited
+		F64                  float64                         `json:"-"` // unsafe exported but omitted
+		F64Ptr               *float64                        `json:"-"` // unsafe exported but omitted
+		F64Slice             []float64                       `json:"-"` // unsafe exported but omitted
+		F64Array             [10]float64                     `json:"-"` // unsafe exported but omitted
+		MapStrF64            map[string]float64              `json:"-"` // unsafe exported but omitted
+		MapEIStr             map[interface{}]string          `json:"-"` // unsafe exported but omitted
+		Number               json.Number                     `json:"-"` // unsafe exported but omitted
+		NumberPtr            *json.Number                    `json:"-"` // unsafe exported but omitted
+		NumberSlice          []json.Number                   `json:"-"` // unsafe exported but omitted
+		MapNumberStr         map[json.Number]string          `json:"-"` // unsafe exported but omitted
+		Ei                   interface{}                     `json:"-"` // unsafe exported but omitted
+		Stringer             fmt.Stringer                    `json:"-"` // unsafe exported but omitted
+		Mt                   marshalText                     `json:"-"` // unsafe exported but omitted
+		MapMarshalTextString map[marshalText]string          `json:"-"` // unsafe exported but omitted
+		ExportedStruct       ExportedUnsafeAndInvalidStruct  `json:"-"` // unsafe exported but omitted
+		ExportedStructPtr    *ExportedUnsafeAndInvalidStruct `json:"-"` // unsafe exported but omitted
 
-		C128         complex128           `json:"-"` // invalid exported but ommited
-		C128Slice    []complex128         `json:"-"` // invalid exported but ommited
-		C128Array    [10]complex128       `json:"-"` // invalid exported but ommited
-		MapBoolStr   map[bool]string      `json:"-"` // invalid exported but ommited
-		MapF64Str    map[float64]string   `json:"-"` // invalid exported but ommited
-		F            func()               `json:"-"` // invalid exported but ommited
-		Ch           chan struct{}        `json:"-"` // invalid exported but ommited
-		UnsafePtr    unsafe.Pointer       `json:"-"` // invalid exported but ommited
-		MapStructStr map[structKey]string `json:"-"` // invalid exported but ommited
+		C128         complex128           `json:"-"` // invalid exported but omitted
+		C128Slice    []complex128         `json:"-"` // invalid exported but omitted
+		C128Array    [10]complex128       `json:"-"` // invalid exported but omitted
+		MapBoolStr   map[bool]string      `json:"-"` // invalid exported but omitted
+		MapF64Str    map[float64]string   `json:"-"` // invalid exported but omitted
+		F            func()               `json:"-"` // invalid exported but omitted
+		Ch           chan struct{}        `json:"-"` // invalid exported but omitted
+		UnsafePtr    unsafe.Pointer       `json:"-"` // invalid exported but omitted
+		MapStructStr map[structKey]string `json:"-"` // invalid exported but omitted
 	}
-	_ = ommitInStruct.MapStructStr[structKey{1}]
-	_, _ = json.Marshal(ommitInStruct)   // struct containing unsafe but omitted, exported fields is safe
-	_, err = json.Marshal(ommitInStruct) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = omitInStruct.MapStructStr[structKey{1}]
+	_, _ = json.Marshal(omitInStruct)   // struct containing unsafe but omitted, exported fields is safe
+	_, err = json.Marshal(omitInStruct) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
 }
 
-// JSONMarshalUnsaveTypes contains a multitude of test cases to marshal different combinations of types to JSON,
+// JSONMarshalUnsafeTypes contains a multitude of test cases to marshal different combinations of types to JSON,
 // that can potentially lead to json.Marshal returning an error.
-func JSONMarshalUnsaveTypes() {
+func JSONMarshalUnsafeTypes() {
 	var err error
 
 	var f32 float32
@@ -585,7 +587,7 @@ func JSONMarshalInvalidTypes() {
 	_, err = json.Marshal(mapStructStr) // want "`encoding/json.Marshal` for unsupported type `standard.structKey` as map key found"
 	_ = err
 
-	var f = func() {}
+	f := func() {}
 	_, _ = json.Marshal(f)   // want "`encoding/json.Marshal` for unsupported type `func\\(\\)` found"
 	_, err = json.Marshal(f) // want "`encoding/json.Marshal` for unsupported type `func\\(\\)` found"
 	_ = err
