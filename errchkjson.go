@@ -119,7 +119,7 @@ func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fn
 			return
 		}
 		if _, ok := err.(noexported); ok {
-			pass.Reportf(n.Pos(), "Error argument passed to `%s` does not contain any exported field", fnName)
+			pass.Reportf(ce.Pos(), "Error argument passed to `%s` does not contain any exported field", fnName)
 		}
 		// Only care about unsafe types if they are assigned to the blank identifier.
 		if blankIdentifier {
