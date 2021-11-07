@@ -25,3 +25,13 @@ func TestOmitSafeFlag(t *testing.T) {
 	testdata := analysistest.TestData()
 	analysistest.Run(t, testdata, errchkjson, "nosafe")
 }
+
+func TestNoExportedField(t *testing.T) {
+	errchkjson := errchkjson.NewAnalyzer()
+	err := errchkjson.Flags.Set("omit-safe", "true")
+	if err != nil {
+		t.Fatalf("error setting 'omit-safe' command line flag: %v", err)
+	}
+	testdata := analysistest.TestData()
+	analysistest.Run(t, testdata, errchkjson, "noexport")
+}
