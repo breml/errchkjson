@@ -391,6 +391,7 @@ func JSONMarshalUnsafeTypes() {
 	var err error
 
 	var f32 float32
+	json.Marshal(f32)          // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float32` found"
 	_, _ = json.Marshal(f32)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float32` found"
 	_, err = json.Marshal(f32) // err is checked
 	_ = err
@@ -514,6 +515,7 @@ func JSONMarshalInvalidTypes() {
 	var err error
 
 	var c64 complex64
+	json.Marshal(c64)          // want "`encoding/json.Marshal` for unsupported type `complex64` found"
 	_, _ = json.Marshal(c64)   // want "`encoding/json.Marshal` for unsupported type `complex64` found"
 	_, err = json.Marshal(c64) // want "`encoding/json.Marshal` for unsupported type `complex64` found"
 	_ = err

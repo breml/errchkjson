@@ -42,18 +42,21 @@ func (e *errchkjson) run(pass *analysis.Pass) (interface{}, error) {
 			}
 
 			ce, ok := n.(*ast.CallExpr)
-			if ok && e.omitSafe {
+			if ok {
 				fn, _ := typeutil.Callee(pass.TypesInfo, ce).(*types.Func)
 				if fn == nil {
 					return true
 				}
 
 				switch fn.FullName() {
-				case "encoding/json.Marshal", "encoding/json.MarshalIndent", "(*encoding/json.Encoder).Encode":
-					pass.Reportf(n.Pos(), "Error return value of `%s` is not checked", fn.FullName())
-					return false
+				case "encoding/json.Marshal", "encoding/json.MarshalIndent":
+					e.handleJSONMarshal(pass, ce, fn.FullName(), true)
+				case "(*encoding/json.Encoder).Encode":
+					e.handleJSONMarshal(pass, ce, fn.FullName(), true)
+				default:
+					return true
 				}
-				return true
+				return false
 			}
 
 			as, ok := n.(*ast.AssignStmt)
@@ -73,9 +76,9 @@ func (e *errchkjson) run(pass *analysis.Pass) (interface{}, error) {
 
 			switch fn.FullName() {
 			case "encoding/json.Marshal", "encoding/json.MarshalIndent":
-				e.handleJSONMarshal(pass, n, fn.FullName(), 1)
+				e.handleJSONMarshal(pass, ce, fn.FullName(), blankIdentifier(as.Lhs[1]))
 			case "(*encoding/json.Encoder).Encode":
-				e.handleJSONMarshal(pass, n, fn.FullName(), 0)
+				e.handleJSONMarshal(pass, ce, fn.FullName(), blankIdentifier(as.Lhs[0]))
 			default:
 				return true
 			}
@@ -86,22 +89,21 @@ func (e *errchkjson) run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
-func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, n ast.Node, fnName string, errPos int) {
-	as := n.(*ast.AssignStmt)
-	ce := as.Rhs[0].(*ast.CallExpr)
-
-	var blankIdentifier bool
-	if errIdent, ok := as.Lhs[errPos].(*ast.Ident); ok {
+func blankIdentifier(n ast.Expr) bool {
+	if errIdent, ok := n.(*ast.Ident); ok {
 		if errIdent.Name == "_" {
-			blankIdentifier = true
+			return true
 		}
 	}
+	return false
+}
 
+func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fnName string, blankIdentifier bool) {
 	t := pass.TypesInfo.TypeOf(ce.Args[0])
 	if t == nil {
 		// Not sure, if this is at all possible
 		if blankIdentifier {
-			pass.Reportf(n.Pos(), "Type of argument to `%s` could not be evaluated and error return value is not checked", fnName)
+			pass.Reportf(ce.Pos(), "Type of argument to `%s` could not be evaluated and error return value is not checked", fnName)
 		}
 		return
 	}
@@ -113,19 +115,19 @@ func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, n ast.Node, fnName s
 	err := jsonSafe(t)
 	if err != nil {
 		if _, ok := err.(unsupported); ok {
-			pass.Reportf(n.Pos(), "`%s` for %v", fnName, err)
+			pass.Reportf(ce.Pos(), "`%s` for %v", fnName, err)
 			return
 		}
 		if blankIdentifier {
-			pass.Reportf(n.Pos(), "Error return value of `%s` is not checked: %v", fnName, err)
+			pass.Reportf(ce.Pos(), "Error return value of `%s` is not checked: %v", fnName, err)
 		}
 	}
 	if err == nil && !blankIdentifier && !e.omitSafe {
-		pass.Reportf(n.Pos(), "Error return value of `%s` is checked but passed argument is safe", fnName)
+		pass.Reportf(ce.Pos(), "Error return value of `%s` is checked but passed argument is safe", fnName)
 	}
 	// Report an error, if err for json.Marshal is not checked and safe types are omitted
 	if err == nil && blankIdentifier && e.omitSafe {
-		pass.Reportf(n.Pos(), "Error return value of `%s` is not checked", fnName)
+		pass.Reportf(ce.Pos(), "Error return value of `%s` is not checked", fnName)
 	}
 }
 
