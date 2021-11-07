@@ -112,12 +112,16 @@ func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fn
 		t = t.(*types.Pointer).Elem()
 	}
 
-	err := jsonSafe(t)
+	err := jsonSafe(t, 0)
 	if err != nil {
 		if _, ok := err.(unsupported); ok {
 			pass.Reportf(ce.Pos(), "`%s` for %v", fnName, err)
 			return
 		}
+		if _, ok := err.(noexported); ok {
+			pass.Reportf(n.Pos(), "Error argument passed to `%s` does not contain any exported field", fnName)
+		}
+		// Only care about unsafe types if they are assigned to the blank identifier.
 		if blankIdentifier {
 			pass.Reportf(ce.Pos(), "Error return value of `%s` is not checked: %v", fnName, err)
 		}
@@ -137,7 +141,7 @@ const (
 	unsupportedBasicTypes   = types.IsComplex
 )
 
-func jsonSafe(t types.Type) error {
+func jsonSafe(t types.Type, level int) error {
 	if types.Implements(t, textMarshalerInterface()) {
 		return fmt.Errorf("unsafe type `%s` found", t.String())
 	}
@@ -164,20 +168,21 @@ func jsonSafe(t types.Type) error {
 		}
 
 	case *types.Array:
-		err := jsonSafe(ut.Elem())
+		err := jsonSafe(ut.Elem(), level+1)
 		if err != nil {
 			return err
 		}
 		return nil
 
 	case *types.Slice:
-		err := jsonSafe(ut.Elem())
+		err := jsonSafe(ut.Elem(), level+1)
 		if err != nil {
 			return err
 		}
 		return nil
 
 	case *types.Struct:
+		exported := 0
 		for i := 0; i < ut.NumFields(); i++ {
 			if !ut.Field(i).Exported() {
 				// Unexported fields can be ignored
@@ -189,15 +194,19 @@ func jsonSafe(t types.Type) error {
 					continue
 				}
 			}
-			err := jsonSafe(ut.Field(i).Type())
+			err := jsonSafe(ut.Field(i).Type(), level+1)
 			if err != nil {
 				return err
 			}
+			exported++
+		}
+		if level == 0 && exported == 0 {
+			return newNoexportedError(fmt.Errorf("struct does not export any field"))
 		}
 		return nil
 
 	case *types.Pointer:
-		err := jsonSafe(ut.Elem())
+		err := jsonSafe(ut.Elem(), level+1)
 		if err != nil {
 			return err
 		}
@@ -208,7 +217,7 @@ func jsonSafe(t types.Type) error {
 		if err != nil {
 			return err
 		}
-		err = jsonSafe(ut.Elem())
+		err = jsonSafe(ut.Elem(), level+1)
 		if err != nil {
 			return err
 		}
