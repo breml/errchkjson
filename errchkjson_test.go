@@ -32,6 +32,10 @@ func TestNoExportedField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error setting 'omit-safe' command line flag: %v", err)
 	}
+	err = errchkjson.Flags.Set("report-no-exported", "true")
+	if err != nil {
+		t.Fatalf("error setting 'report-no-exported' command line flag: %v", err)
+	}
 	testdata := analysistest.TestData()
 	analysistest.Run(t, testdata, errchkjson, "noexport")
 }
