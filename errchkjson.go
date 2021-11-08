@@ -15,7 +15,8 @@ import (
 )
 
 type errchkjson struct {
-	omitSafe bool // -omit-safe flag
+	omitSafe         bool // -omit-safe flag
+	reportNoExported bool // -report-no-exported flag
 }
 
 // NewAnalyzer returns a new errchkjson analyzer.
@@ -30,6 +31,7 @@ func NewAnalyzer() *analysis.Analyzer {
 
 	a.Flags.Init("errchkjson", flag.ExitOnError)
 	a.Flags.BoolVar(&errchkjson.omitSafe, "omit-safe", false, "if omit-safe is true, checking of safe returns is omitted")
+	a.Flags.BoolVar(&errchkjson.reportNoExported, "report-no-exported", false, "if report-no-exported is true, encoding a struct without exported fields is reported as issue")
 
 	return a
 }
@@ -112,7 +114,7 @@ func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fn
 		t = t.(*types.Pointer).Elem()
 	}
 
-	err := jsonSafe(t, 0)
+	err := e.jsonSafe(t, 0)
 	if err != nil {
 		if _, ok := err.(unsupported); ok {
 			pass.Reportf(ce.Pos(), "`%s` for %v", fnName, err)
@@ -141,7 +143,7 @@ const (
 	unsupportedBasicTypes   = types.IsComplex
 )
 
-func jsonSafe(t types.Type, level int) error {
+func (e *errchkjson) jsonSafe(t types.Type, level int) error {
 	if types.Implements(t, textMarshalerInterface()) {
 		return fmt.Errorf("unsafe type `%s` found", t.String())
 	}
@@ -168,14 +170,14 @@ func jsonSafe(t types.Type, level int) error {
 		}
 
 	case *types.Array:
-		err := jsonSafe(ut.Elem(), level+1)
+		err := e.jsonSafe(ut.Elem(), level+1)
 		if err != nil {
 			return err
 		}
 		return nil
 
 	case *types.Slice:
-		err := jsonSafe(ut.Elem(), level+1)
+		err := e.jsonSafe(ut.Elem(), level+1)
 		if err != nil {
 			return err
 		}
@@ -194,19 +196,19 @@ func jsonSafe(t types.Type, level int) error {
 					continue
 				}
 			}
-			err := jsonSafe(ut.Field(i).Type(), level+1)
+			err := e.jsonSafe(ut.Field(i).Type(), level+1)
 			if err != nil {
 				return err
 			}
 			exported++
 		}
-		if level == 0 && exported == 0 {
+		if e.reportNoExported && level == 0 && exported == 0 {
 			return newNoexportedError(fmt.Errorf("struct does not export any field"))
 		}
 		return nil
 
 	case *types.Pointer:
-		err := jsonSafe(ut.Elem(), level+1)
+		err := e.jsonSafe(ut.Elem(), level+1)
 		if err != nil {
 			return err
 		}
@@ -217,7 +219,7 @@ func jsonSafe(t types.Type, level int) error {
 		if err != nil {
 			return err
 		}
-		err = jsonSafe(ut.Elem(), level+1)
+		err = e.jsonSafe(ut.Elem(), level+1)
 		if err != nil {
 			return err
 		}
