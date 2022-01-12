@@ -612,3 +612,12 @@ func NotJSONMarshal() {
 	f := func() bool { return false }
 	_ = f()
 }
+
+// Issue 5
+type T struct {
+	s string
+}
+
+func (t T) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.s) // not an error because it is the caller's responsibility to check the error
+}
