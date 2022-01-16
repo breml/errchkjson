@@ -43,6 +43,12 @@ func (e *errchkjson) run(pass *analysis.Pass) (interface{}, error) {
 				return true
 			}
 
+			// if the error is returned, it is the caller's responsibility to check
+			// the return value.
+			if _, ok := n.(*ast.ReturnStmt); ok {
+				return false
+			}
+
 			ce, ok := n.(*ast.CallExpr)
 			if ok {
 				fn, _ := typeutil.Callee(pass.TypesInfo, ce).(*types.Func)
