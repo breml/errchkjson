@@ -4,21 +4,15 @@ import (
 	"encoding/json"
 )
 
-type bqSchemaEntry struct {
-	Name        string   `json:"name"`
-	Type        string   `json:"type"`
-	Mode        string   `json:"mode"`
-	Description string   `json:"description"`
-	Fields      bqSchema `json:"fields"`
+type entry struct {
+	Name   string `json:"name"`
+	Fields schema `json:"fields"`
 }
 
-type bqSchema []bqSchemaEntry
+type schema []entry
 
-// JSONMarshalStructWithoutExportedFields contains a struct without exported fields.
+// JSONMarshalStructWithLoop contains a struct with a loop.
 func JSONMarshalStructWithLoop() {
-	var err error
-
-	var withoutExportedFields bqSchema
-	_, err = json.Marshal(withoutExportedFields) // want "Error argument passed to `encoding/json.Marshal` does not contain any exported field"
-	_ = err
+	var structWithLoop schema
+	_, _ = json.Marshal(structWithLoop)
 }
