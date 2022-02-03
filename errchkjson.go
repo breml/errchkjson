@@ -120,7 +120,7 @@ func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fn
 		t = t.(*types.Pointer).Elem()
 	}
 
-	err := e.jsonSafe(t, 0)
+	err := e.jsonSafe(t, 0, map[types.Type]struct{}{})
 	if err != nil {
 		if _, ok := err.(unsupported); ok {
 			pass.Reportf(ce.Pos(), "`%s` for %v", fnName, err)
@@ -149,7 +149,11 @@ const (
 	unsupportedBasicTypes   = types.IsComplex
 )
 
-func (e *errchkjson) jsonSafe(t types.Type, level int) error {
+func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]struct{}) error {
+	if _, ok := seenTypes[t]; ok {
+		return nil
+	}
+
 	if types.Implements(t, textMarshalerInterface()) {
 		return fmt.Errorf("unsafe type `%s` found", t.String())
 	}
@@ -176,20 +180,21 @@ func (e *errchkjson) jsonSafe(t types.Type, level int) error {
 		}
 
 	case *types.Array:
-		err := e.jsonSafe(ut.Elem(), level+1)
+		err := e.jsonSafe(ut.Elem(), level+1, seenTypes)
 		if err != nil {
 			return err
 		}
 		return nil
 
 	case *types.Slice:
-		err := e.jsonSafe(ut.Elem(), level+1)
+		err := e.jsonSafe(ut.Elem(), level+1, seenTypes)
 		if err != nil {
 			return err
 		}
 		return nil
 
 	case *types.Struct:
+		seenTypes[t] = struct{}{}
 		exported := 0
 		for i := 0; i < ut.NumFields(); i++ {
 			if !ut.Field(i).Exported() {
@@ -202,7 +207,7 @@ func (e *errchkjson) jsonSafe(t types.Type, level int) error {
 					continue
 				}
 			}
-			err := e.jsonSafe(ut.Field(i).Type(), level+1)
+			err := e.jsonSafe(ut.Field(i).Type(), level+1, seenTypes)
 			if err != nil {
 				return err
 			}
@@ -214,7 +219,7 @@ func (e *errchkjson) jsonSafe(t types.Type, level int) error {
 		return nil
 
 	case *types.Pointer:
-		err := e.jsonSafe(ut.Elem(), level+1)
+		err := e.jsonSafe(ut.Elem(), level+1, seenTypes)
 		if err != nil {
 			return err
 		}
@@ -225,7 +230,7 @@ func (e *errchkjson) jsonSafe(t types.Type, level int) error {
 		if err != nil {
 			return err
 		}
-		err = e.jsonSafe(ut.Elem(), level+1)
+		err = e.jsonSafe(ut.Elem(), level+1, seenTypes)
 		if err != nil {
 			return err
 		}

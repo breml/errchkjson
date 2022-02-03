@@ -39,3 +39,10 @@ func TestNoExportedField(t *testing.T) {
 	testdata := analysistest.TestData()
 	analysistest.Run(t, testdata, errchkjson, "noexport")
 }
+
+func TestLoop(t *testing.T) {
+	errchkjson := errchkjson.NewAnalyzer()
+
+	testdata := analysistest.TestData()
+	analysistest.Run(t, testdata, errchkjson, "loop")
+}
