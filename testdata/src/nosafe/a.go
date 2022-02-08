@@ -10,11 +10,19 @@ import (
 
 type marshalText struct{}
 
-func (mt marshalText) MarshalText() ([]byte, error) {
+func (_ marshalText) MarshalText() ([]byte, error) {
 	return []byte(`mt`), nil
 }
 
 var _ encoding.TextMarshaler = marshalText(struct{}{})
+
+type marshalJSON struct{}
+
+func (_ marshalJSON) MarshalJSON() ([]byte, error) {
+	return []byte(`mj`), nil
+}
+
+var _ json.Marshaler = marshalJSON(struct{}{})
 
 // JSONMarshalSafeTypesWithNoSafe contains a multitude of test cases to marshal different combinations of types to JSON,
 // that are safe, that is, they will never return an error, if these types are marshaled to JSON.
@@ -266,6 +274,8 @@ type (
 		Stringer             fmt.Stringer
 		Mt                   marshalText
 		MapMarshalTextString map[marshalText]string
+		Mj                   marshalJSON
+		MapMarshalJSONString map[marshalJSON]string
 
 		C128         complex128
 		C128Ptr      *complex128
@@ -301,6 +311,8 @@ func JSONMarshalSafeStructWithUnexportedFieldsWithNoSafe() {
 		stringer             fmt.Stringer                    // unsafe unexported
 		mt                   marshalText                     // unsafe unexported
 		mapMarshalTextString map[marshalText]string          // unsafe unexported
+		mj                   marshalJSON                     // unsafe unexported
+		mapMarshalJSONString map[marshalJSON]string          // unsafe unexported
 		unexportedStruct     ExportedUnsafeAndInvalidStruct  // unsafe unexported
 		unexportedStructPtr  *ExportedUnsafeAndInvalidStruct // unsafe unexported
 
@@ -366,6 +378,8 @@ func JSONMarshalSafeStructWithOmittedFieldsWithNoSafe() {
 		Stringer             fmt.Stringer                    `json:"-"` // unsafe exported but omitted
 		Mt                   marshalText                     `json:"-"` // unsafe exported but omitted
 		MapMarshalTextString map[marshalText]string          `json:"-"` // unsafe exported but omitted
+		Mj                   marshalJSON                     `json:"-"` // unsafe exported but omitted
+		MapMarshalJSONString map[marshalJSON]string          `json:"-"` // unsafe exported but omitted
 		ExportedStruct       ExportedUnsafeAndInvalidStruct  `json:"-"` // unsafe exported but omitted
 		ExportedStructPtr    *ExportedUnsafeAndInvalidStruct `json:"-"` // unsafe exported but omitted
 
@@ -505,6 +519,16 @@ func JSONMarshalUnsafeTypes() {
 	var mapMarshalTextString map[marshalText]string
 	_, _ = json.Marshal(mapMarshalTextString)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `nosafe.marshalText` as map key found"
 	_, err = json.Marshal(mapMarshalTextString) // err is checked
+	_ = err
+
+	var mj marshalJSON
+	_, _ = json.Marshal(mj)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `nosafe.marshalJSON` found"
+	_, err = json.Marshal(mj) // err is checked
+	_ = err
+
+	var mapMarshalJSONString map[marshalJSON]string
+	_, _ = json.Marshal(mapMarshalJSONString)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `nosafe.marshalJSON` as map key found"
+	_, err = json.Marshal(mapMarshalJSONString) // err is checked
 	_ = err
 }
 

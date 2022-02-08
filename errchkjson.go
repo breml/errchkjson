@@ -154,7 +154,7 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 		return nil
 	}
 
-	if types.Implements(t, textMarshalerInterface()) {
+	if types.Implements(t, textMarshalerInterface()) || types.Implements(t, jsonMarshalerInterface()) {
 		return fmt.Errorf("unsafe type `%s` found", t.String())
 	}
 
@@ -247,7 +247,7 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 }
 
 func jsonSafeMapKey(t types.Type) error {
-	if types.Implements(t, textMarshalerInterface()) {
+	if types.Implements(t, textMarshalerInterface()) || types.Implements(t, jsonMarshalerInterface()) {
 		return fmt.Errorf("unsafe type `%s` as map key found", t.String())
 	}
 	switch ut := t.Underlying().(type) {
@@ -268,7 +268,7 @@ func jsonSafeMapKey(t types.Type) error {
 	}
 }
 
-// Construct *types.Interface for interface TextMarshaler
+// Construct *types.Interface for interface encoding.TextMarshaler
 //     type TextMarshaler interface {
 //         MarshalText() (text []byte, err error)
 //     }
@@ -281,6 +281,26 @@ func textMarshalerInterface() *types.Interface {
 					types.NewSlice(
 						types.Universe.Lookup("byte").Type())),
 				types.NewVar(token.NoPos, nil, "err", types.Universe.Lookup("error").Type())),
+			false)),
+	}, nil)
+	textMarshalerInterface.Complete()
+
+	return textMarshalerInterface
+}
+
+// Construct *types.Interface for interface json.Marshaler
+//     type Marshaler interface {
+//         MarshalJSON() ([]byte, error)
+//     }
+//
+func jsonMarshalerInterface() *types.Interface {
+	textMarshalerInterface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "MarshalJSON", types.NewSignature(
+			nil, nil, types.NewTuple(
+				types.NewVar(token.NoPos, nil, "",
+					types.NewSlice(
+						types.Universe.Lookup("byte").Type())),
+				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
 			false)),
 	}, nil)
 	textMarshalerInterface.Complete()
