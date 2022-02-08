@@ -32,6 +32,7 @@ func NewAnalyzer() *analysis.Analyzer {
 	a.Flags.Init("errchkjson", flag.ExitOnError)
 	a.Flags.BoolVar(&errchkjson.omitSafe, "omit-safe", false, "if omit-safe is true, checking of safe returns is omitted")
 	a.Flags.BoolVar(&errchkjson.reportNoExported, "report-no-exported", false, "if report-no-exported is true, encoding a struct without exported fields is reported as issue")
+	a.Flags.Var(versionFlag{}, "V", "print version and exit")
 
 	return a
 }
