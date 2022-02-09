@@ -2,7 +2,7 @@
 
 [![Test Status](https://github.com/breml/errchkjson/actions/workflows/ci.yml/badge.svg)](https://github.com/breml/errchkjson/actions/workflows/ci.yml) [![Go Report Card](https://goreportcard.com/badge/github.com/breml/errchkjson)](https://goreportcard.com/report/github.com/breml/errchkjson) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Checks types passed to the json encoding functions. Reports unsupported types and reports occations, where the check for the returned error can be omited.
+Checks types passed to the json encoding functions. Reports unsupported types and reports occurrences where the check for the returned error can be omitted.
 
 Consider this [http.Handler](https://pkg.go.dev/net/http#Handler):
 
