@@ -33,6 +33,7 @@ func JSONMarshalSafeTypesWithNoSafe() {
 	json.Marshal(nil)          // want "Error return value of `encoding/json.Marshal` is not checked"
 	_, err = json.Marshal(nil) // nil is safe, but omit-safe is set
 	_ = err
+	fmt.Print(json.Marshal(nil)) // nil is safe, error is passed as argument
 
 	_, _ = json.MarshalIndent(nil, "", " ")   // want "Error return value of `encoding/json.MarshalIndent` is not checked"
 	json.MarshalIndent(nil, "", " ")          // want "Error return value of `encoding/json.MarshalIndent` is not checked"
@@ -409,6 +410,7 @@ func JSONMarshalUnsafeTypes() {
 	_, _ = json.Marshal(f32)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float32` found"
 	_, err = json.Marshal(f32) // err is checked
 	_ = err
+	fmt.Print(json.Marshal(f32)) // err is passed and therefore considered as checked
 
 	var f64 float64
 	_, _ = json.Marshal(f64)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
@@ -543,6 +545,7 @@ func JSONMarshalInvalidTypes() {
 	_, _ = json.Marshal(c64)   // want "`encoding/json.Marshal` for unsupported type `complex64` found"
 	_, err = json.Marshal(c64) // want "`encoding/json.Marshal` for unsupported type `complex64` found"
 	_ = err
+	fmt.Print(json.Marshal(c64)) // want "`encoding/json.Marshal` for unsupported type `complex64` found"
 
 	var c128 complex128
 	_, _ = json.Marshal(c128)   // want "`encoding/json.Marshal` for unsupported type `complex128` found"
