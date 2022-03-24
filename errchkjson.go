@@ -59,9 +59,9 @@ func (e *errchkjson) run(pass *analysis.Pass) (interface{}, error) {
 
 				switch fn.FullName() {
 				case "encoding/json.Marshal", "encoding/json.MarshalIndent":
-					e.handleJSONMarshal(pass, ce, fn.FullName(), blankIdentifier)
+					e.handleJSONMarshal(pass, ce, fn.FullName(), blankIdentifier, e.omitSafe)
 				case "(*encoding/json.Encoder).Encode":
-					e.handleJSONMarshal(pass, ce, fn.FullName(), blankIdentifier)
+					e.handleJSONMarshal(pass, ce, fn.FullName(), blankIdentifier, true)
 				default:
 					e.inspectArgs(pass, ce.Args)
 				}
@@ -85,9 +85,9 @@ func (e *errchkjson) run(pass *analysis.Pass) (interface{}, error) {
 
 			switch fn.FullName() {
 			case "encoding/json.Marshal", "encoding/json.MarshalIndent":
-				e.handleJSONMarshal(pass, ce, fn.FullName(), evaluateMarshalErrorTarget(as.Lhs[1]))
+				e.handleJSONMarshal(pass, ce, fn.FullName(), evaluateMarshalErrorTarget(as.Lhs[1]), e.omitSafe)
 			case "(*encoding/json.Encoder).Encode":
-				e.handleJSONMarshal(pass, ce, fn.FullName(), evaluateMarshalErrorTarget(as.Lhs[0]))
+				e.handleJSONMarshal(pass, ce, fn.FullName(), evaluateMarshalErrorTarget(as.Lhs[0]), true)
 			default:
 				return true
 			}
@@ -115,7 +115,7 @@ const (
 	functionArgument          // the returned error from the JSON marshal function is passed to an other function as argument.
 )
 
-func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fnName string, errorTarget marshalErrorTarget) {
+func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fnName string, errorTarget marshalErrorTarget, omitSafe bool) {
 	t := pass.TypesInfo.TypeOf(ce.Args[0])
 	if t == nil {
 		// Not sure, if this is at all possible
@@ -143,11 +143,11 @@ func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fn
 			pass.Reportf(ce.Pos(), "Error return value of `%s` is not checked: %v", fnName, err)
 		}
 	}
-	if err == nil && errorTarget == variableAssignment && !e.omitSafe {
+	if err == nil && errorTarget == variableAssignment && !omitSafe {
 		pass.Reportf(ce.Pos(), "Error return value of `%s` is checked but passed argument is safe", fnName)
 	}
 	// Report an error, if err for json.Marshal is not checked and safe types are omitted
-	if err == nil && errorTarget == blankIdentifier && e.omitSafe {
+	if err == nil && errorTarget == blankIdentifier && omitSafe {
 		pass.Reportf(ce.Pos(), "Error return value of `%s` is not checked", fnName)
 	}
 }
@@ -296,9 +296,9 @@ func (e *errchkjson) inspectArgs(pass *analysis.Pass, args []ast.Expr) {
 
 			switch fn.FullName() {
 			case "encoding/json.Marshal", "encoding/json.MarshalIndent":
-				e.handleJSONMarshal(pass, ce, fn.FullName(), functionArgument)
+				e.handleJSONMarshal(pass, ce, fn.FullName(), functionArgument, e.omitSafe)
 			case "(*encoding/json.Encoder).Encode":
-				e.handleJSONMarshal(pass, ce, fn.FullName(), functionArgument)
+				e.handleJSONMarshal(pass, ce, fn.FullName(), functionArgument, true)
 			default:
 				e.inspectArgs(pass, ce.Args)
 			}

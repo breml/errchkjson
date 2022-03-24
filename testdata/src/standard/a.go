@@ -41,9 +41,9 @@ func JSONMarshalSafeTypes() {
 	_ = err
 
 	enc := json.NewEncoder(ioutil.Discard)
-	_ = enc.Encode(nil)   // nil is safe
-	enc.Encode(nil)       // nil is safe
-	err = enc.Encode(nil) // want "Error return value of `\\([*]encoding/json.Encoder\\).Encode` is checked but passed argument is safe"
+	_ = enc.Encode(nil)   // want "Error return value of `\\([*]encoding/json.Encoder\\).Encode` is not checked"
+	enc.Encode(nil)       // want "Error return value of `\\([*]encoding/json.Encoder\\).Encode` is not checked"
+	err = enc.Encode(nil) // nil is safe, but encoding/json.Encoder may return non json related errors
 	_ = err
 
 	var b bool
@@ -611,7 +611,7 @@ func JSONMarshalInvalidTypes() {
 	_, err = json.Marshal(mapC128Str) // want "`encoding/json.Marshal` for unsupported type `complex128` as map key found"
 	_ = err
 
-	mapStructStr := map[structKey]string{structKey{1}: "str"}
+	mapStructStr := map[structKey]string{{1}: "str"}
 	_, _ = json.Marshal(mapStructStr)   // want "`encoding/json.Marshal` for unsupported type `standard.structKey` as map key found"
 	_, err = json.Marshal(mapStructStr) // want "`encoding/json.Marshal` for unsupported type `standard.structKey` as map key found"
 	_ = err
