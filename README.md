@@ -114,6 +114,12 @@ Forbidden basic types:
 Any composed types (struct, map, slice, array) containing a forbidden basic type. Any map
 using a key with a forbidden type (`bool`, `float32`, `float64`, `struct`).
 
+## Accepted edge case
+
+For `encoding/json.MarshalIndent`, there is a (pathological) edge case, where this
+function could [return an error](https://cs.opensource.google/go/go/+/refs/tags/go1.18:src/encoding/json/scanner.go;drc=refs%2Ftags%2Fgo1.18;l=181) for an otherwise safe argument, if the argument has
+a nesting depth larger than [`10000`](https://cs.opensource.google/go/go/+/refs/tags/go1.18:src/encoding/json/scanner.go;drc=refs%2Ftags%2Fgo1.18;l=144) (as of Go 1.18).
+
 ## Bugs found during development
 
 During the development of `errcheckjson`, the following issues in package `encoding/json` of the Go standard library have been found and PR have been merged:
