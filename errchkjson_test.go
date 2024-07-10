@@ -46,3 +46,10 @@ func TestLoop(t *testing.T) {
 	testdata := analysistest.TestData()
 	analysistest.Run(t, testdata, errchkjson, "loop")
 }
+
+func TestIssue47(t *testing.T) {
+	errchkjson := errchkjson.NewAnalyzer()
+
+	testdata := analysistest.TestData()
+	analysistest.Run(t, testdata, errchkjson, "issue_47")
+}
