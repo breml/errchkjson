@@ -593,6 +593,41 @@ func JSONv2MarshalInvalidTypes() {
 	_ = json.MarshalEncode(enc, ch) // want "`encoding/json/v2.MarshalEncode` for unsupported type `chan int` found"
 }
 
+func writerAndBool() (io.Writer, bool)          { return io.Discard, true }
+func writerAndString() (io.Writer, string)      { return io.Discard, "" }
+func writerAndChan() (io.Writer, chan int)      { return io.Discard, nil }
+func encoderAndBool() (*jsontext.Encoder, bool) { return jsontext.NewEncoder(io.Discard), true }
+func boolAndOptions() (bool, json.Options)      { return true, json.Deterministic(true) }
+func writerBoolAndOptions() (io.Writer, bool, json.Options) {
+	return io.Discard, true, json.Deterministic(true)
+}
+
+// JSONv2MarshalMultiValueArgument contains test cases, where the arguments are
+// passed as the result of a call returning multiple values.
+func JSONv2MarshalMultiValueArgument() {
+	var err error
+
+	_ = json.MarshalWrite(writerAndBool())   // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked"
+	json.MarshalWrite(writerAndBool())       // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked"
+	err = json.MarshalWrite(writerAndBool()) // safe, but the io.Writer may return an error
+	_ = err
+	fmt.Print(json.MarshalWrite(writerAndBool())) // err is passed as argument
+
+	_ = json.MarshalWrite(writerAndString())   // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: unsafe type `string` found"
+	err = json.MarshalWrite(writerAndString()) // err is checked
+	_ = err
+
+	_ = json.MarshalWrite(writerAndChan()) // want "`encoding/json/v2.MarshalWrite` for unsupported type `chan int` found"
+
+	_ = json.MarshalEncode(encoderAndBool()) // want "Error return value of `encoding/json/v2.MarshalEncode` is not checked"
+
+	_, _ = json.Marshal(boolAndOptions())   // want "Error return value of `encoding/json/v2.Marshal` is not checked: options passed, safety of the encoding can not be determined"
+	_, err = json.Marshal(boolAndOptions()) // err is checked, no report about a safe argument
+	_ = err
+
+	_ = json.MarshalWrite(writerBoolAndOptions()) // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: options passed, safety of the encoding can not be determined"
+}
+
 // Returned errors are the caller's responsibility.
 func returned() ([]byte, error) {
 	var str string

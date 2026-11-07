@@ -712,6 +712,11 @@ func JSONMarshalGo127() {
 	_, err = json.Marshal(v2OnlyEmbedded) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
 
+	// Multi-value arguments are not expanded for encoding/json.
+	_, _ = json.MarshalIndent(intAndIndent())   // want "Error return value of `encoding/json.MarshalIndent` is not checked: unsafe type `\\(int, string, string\\)` found"
+	_, err = json.MarshalIndent(intAndIndent()) // err is checked
+	_ = err
+
 	var v2OnlyNoExported struct {
 		a int
 	}
@@ -723,3 +728,5 @@ func JSONMarshalGo127() {
 type embeddedUnexportedFloat struct {
 	F float64
 }
+
+func intAndIndent() (int, string, string) { return 0, "", "  " }

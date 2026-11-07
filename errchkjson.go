@@ -128,19 +128,20 @@ var jsonFuncs = map[string]jsonFunc{
 }
 
 func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fnName string, jf jsonFunc, errorTarget marshalErrorTarget) {
-	if len(ce.Args) <= jf.argIdx {
+	argTypes := callArgTypes(pass, ce, jf.v2)
+	if len(argTypes) <= jf.argIdx {
 		return
 	}
 
 	omitSafe := e.omitSafe || jf.alwaysOmitSafe
 
 	var err error
-	if jf.v2 && len(ce.Args) > jf.argIdx+1 {
+	if jf.v2 && len(argTypes) > jf.argIdx+1 {
 		// Options (e.g. json.WithMarshalers) can change the encoding of any type,
 		// therefore the safety of the encoding can not be determined.
 		err = fmt.Errorf("options passed, safety of the encoding can not be determined")
 	} else {
-		t := pass.TypesInfo.TypeOf(ce.Args[jf.argIdx])
+		t := argTypes[jf.argIdx]
 		if t == nil {
 			// Not sure, if this is at all possible
 			if errorTarget == blankIdentifier {
@@ -183,6 +184,31 @@ const (
 	allowedMapKeyBasicTypes = types.IsInteger | types.IsString
 	unsupportedBasicTypes   = types.IsComplex
 )
+
+// callArgTypes returns the types of the arguments of the call ce. If
+// expandTuple is true and the only argument is a call returning multiple
+// values (e.g. json.MarshalWrite(f())), the types of the returned values are
+// returned instead.
+//
+// For encoding/json, multi-value arguments are not expanded for backwards
+// compatibility, the tuple type is checked as is (and considered unsafe).
+func callArgTypes(pass *analysis.Pass, ce *ast.CallExpr, expandTuple bool) []types.Type {
+	if expandTuple && len(ce.Args) == 1 {
+		if tuple, ok := pass.TypesInfo.TypeOf(ce.Args[0]).(*types.Tuple); ok {
+			argTypes := make([]types.Type, 0, tuple.Len())
+			for v := range tuple.Variables() {
+				argTypes = append(argTypes, v.Type())
+			}
+			return argTypes
+		}
+	}
+
+	argTypes := make([]types.Type, 0, len(ce.Args))
+	for _, arg := range ce.Args {
+		argTypes = append(argTypes, pass.TypesInfo.TypeOf(arg))
+	}
+	return argTypes
+}
 
 // jsonSafe checks, if encoding a value of type t to JSON can fail. If v2 is
 // true, the rules of encoding/json/v2 are applied.
