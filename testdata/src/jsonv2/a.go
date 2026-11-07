@@ -29,6 +29,36 @@ func (_ appendText) AppendText(b []byte) ([]byte, error) {
 	return append(b, `at`...), nil
 }
 
+type ptrMarshalJSON struct{ A int }
+
+func (_ *ptrMarshalJSON) MarshalJSON() ([]byte, error) {
+	return []byte(`"pmj"`), nil
+}
+
+type ptrMarshalText struct{ A int }
+
+func (_ *ptrMarshalText) MarshalText() ([]byte, error) {
+	return []byte(`pmt`), nil
+}
+
+type ptrMarshalJSONTo struct{ A int }
+
+func (_ *ptrMarshalJSONTo) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return enc.WriteToken(jsontext.String("pmjt"))
+}
+
+type ptrAppendText struct{ A int }
+
+func (_ *ptrAppendText) AppendText(b []byte) ([]byte, error) {
+	return append(b, `pat`...), nil
+}
+
+type ptrTextKey int
+
+func (_ *ptrTextKey) MarshalText() ([]byte, error) {
+	return []byte(`ptk`), nil
+}
+
 type structKey struct{ id int }
 
 type unexportedOnly struct {
@@ -215,6 +245,40 @@ func JSONv2MarshalUnsafeTypes() {
 
 	var at appendText
 	_, _ = json.Marshal(at) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.appendText` found"
+
+	// encoding/json/v2 always calls marshal methods with a pointer receiver,
+	// even if the value is not addressable.
+	var pmj ptrMarshalJSON
+	_, _ = json.Marshal(pmj)      // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.ptrMarshalJSON` found"
+	_, _ = json.Marshal(&pmj)     // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.ptrMarshalJSON` found"
+	_, err = json.Marshal(pmj)    // err is checked
+	_, err = stdjson.Marshal(pmj) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var pmt ptrMarshalText
+	_, _ = json.Marshal(pmt) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.ptrMarshalText` found"
+
+	var pmjt ptrMarshalJSONTo
+	_, _ = json.Marshal(pmjt) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.ptrMarshalJSONTo` found"
+
+	var pat ptrAppendText
+	_, _ = json.Marshal(pat) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.ptrAppendText` found"
+
+	var pmjSlice []ptrMarshalJSON
+	_, _ = json.Marshal(pmjSlice) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.ptrMarshalJSON` found"
+
+	var pmjMap map[int]ptrMarshalJSON
+	_, _ = json.Marshal(pmjMap) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.ptrMarshalJSON` found"
+
+	var pmjField struct {
+		F ptrMarshalJSONTo `json:"f"`
+	}
+	_, _ = json.Marshal(pmjField) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.ptrMarshalJSONTo` found"
+
+	var ptkMap map[ptrTextKey]int
+	_, _ = json.Marshal(ptkMap)      // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.ptrTextKey` as map key found"
+	_, err = stdjson.Marshal(ptkMap) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
 
 	var buf bytes.Buffer
 	_ = json.MarshalWrite(&buf, str)   // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: unsafe type `string` found"

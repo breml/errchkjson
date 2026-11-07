@@ -135,6 +135,8 @@ types are the same as above, with the following differences:
 * `string` (including named string types and string map keys) is unsafe, because `encoding/json/v2`
   returns an error for strings containing invalid UTF-8.
 * `time.Duration` is unsafe, because it has no default representation in `encoding/json/v2`.
+* Types, which implement one of the marshaler interfaces with a pointer receiver (e.g. `func (*T) MarshalJSON() ([]byte, error)`),
+  are unsafe, even if they are passed by value, because `encoding/json/v2` always calls these methods.
 * Float map keys (e.g. `map[float64]string`) are unsafe instead of forbidden.
 * Struct fields with the `string` option in the `json` struct tag are unsafe, if the type of the field is
   not numeric.

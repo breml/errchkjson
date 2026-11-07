@@ -191,7 +191,7 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 		return nil
 	}
 
-	if implementsMarshaler(t) {
+	if implementsMarshaler(t, v2) {
 		return fmt.Errorf("unsafe type `%s` found", t.String())
 	}
 
@@ -328,7 +328,7 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 }
 
 func jsonSafeMapKey(t types.Type, v2 bool) error {
-	if implementsMarshaler(t) || (v2 && isTimeDuration(t)) {
+	if implementsMarshaler(t, v2) || (v2 && isTimeDuration(t)) {
 		return fmt.Errorf("unsafe type `%s` as map key found", t.String())
 	}
 	switch ut := t.Underlying().(type) {
@@ -400,7 +400,27 @@ func isTimeDuration(t types.Type) bool {
 
 // implementsMarshaler reports, if t implements one of the interfaces, which
 // allow a type to customize its JSON encoding (and therefore may return an error).
-func implementsMarshaler(t types.Type) bool {
+//
+// If v2 is true, the method set of *t is considered as well, because
+// encoding/json/v2 always calls marshal methods with a pointer receiver, even
+// if the value is not addressable.
+func implementsMarshaler(t types.Type, v2 bool) bool {
+	if implementsMarshalerMethodSet(t) {
+		return true
+	}
+	if !v2 {
+		return false
+	}
+	switch t.Underlying().(type) {
+	case *types.Pointer, *types.Interface:
+		return false
+	}
+	return implementsMarshalerMethodSet(types.NewPointer(t))
+}
+
+// implementsMarshalerMethodSet reports, if the method set of t contains one
+// of the methods, which allow a type to customize its JSON encoding.
+func implementsMarshalerMethodSet(t types.Type) bool {
 	return types.Implements(t, textMarshalerInterface()) ||
 		types.Implements(t, jsonMarshalerInterface()) ||
 		types.Implements(t, textAppenderInterface()) ||
