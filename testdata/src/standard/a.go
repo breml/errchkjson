@@ -648,3 +648,49 @@ type T struct {
 func (t T) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.f64) // not an error because it is the caller's responsibility to check the error
 }
+
+type appendText struct{}
+
+func (_ appendText) AppendText(b []byte) ([]byte, error) {
+	return append(b, `at`...), nil
+}
+
+// JSONMarshalGo127 contains test cases for types, which can lead to an error
+// when encoded with encoding/json as of Go 1.27, where encoding/json is
+// implemented on top of encoding/json/v2.
+func JSONMarshalGo127() {
+	var err error
+
+	var at appendText
+	_, _ = json.Marshal(at)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `standard.appendText` found"
+	_, err = json.Marshal(at) // err is checked
+	_ = err
+
+	var mapAppendTextString map[appendText]string
+	_, _ = json.Marshal(mapAppendTextString)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `standard.appendText` as map key found"
+	_, err = json.Marshal(mapAppendTextString) // err is checked
+	_ = err
+
+	var formatTag struct {
+		Int int `json:"int,format:foo"`
+	}
+	_, _ = json.Marshal(formatTag)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe struct tag option `format:foo` on field `Int` found"
+	_, err = json.Marshal(formatTag) // err is checked
+	_ = err
+
+	var formatTagOmitted struct {
+		Int int `json:"-"`
+	}
+	_, err = json.Marshal(formatTagOmitted) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// encoding/json does not apply the encoding/json/v2 rules.
+	var v2Only struct {
+		Bool   bool   `json:"bool,string"`
+		String string `json:"string,string"`
+		A      int    `json:"x"`
+		B      int    `json:"x"`
+	}
+	_, err = json.Marshal(v2Only) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+}

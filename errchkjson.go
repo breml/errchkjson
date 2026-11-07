@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"go/types"
 	"reflect"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/types/typeutil"
@@ -57,12 +58,9 @@ func (e *errchkjson) run(pass *analysis.Pass) (interface{}, error) {
 					return true
 				}
 
-				switch fn.FullName() {
-				case "encoding/json.Marshal", "encoding/json.MarshalIndent":
-					e.handleJSONMarshal(pass, ce, fn.FullName(), blankIdentifier, e.omitSafe)
-				case "(*encoding/json.Encoder).Encode":
-					e.handleJSONMarshal(pass, ce, fn.FullName(), blankIdentifier, true)
-				default:
+				if jf, ok := jsonFuncs[fn.FullName()]; ok {
+					e.handleJSONMarshal(pass, ce, fn.FullName(), jf, blankIdentifier)
+				} else {
 					e.inspectArgs(pass, ce.Args)
 				}
 				return false
@@ -83,14 +81,11 @@ func (e *errchkjson) run(pass *analysis.Pass) (interface{}, error) {
 				return true
 			}
 
-			switch fn.FullName() {
-			case "encoding/json.Marshal", "encoding/json.MarshalIndent":
-				e.handleJSONMarshal(pass, ce, fn.FullName(), evaluateMarshalErrorTarget(as.Lhs[1]), e.omitSafe)
-			case "(*encoding/json.Encoder).Encode":
-				e.handleJSONMarshal(pass, ce, fn.FullName(), evaluateMarshalErrorTarget(as.Lhs[0]), true)
-			default:
+			jf, ok := jsonFuncs[fn.FullName()]
+			if !ok || len(as.Lhs) <= jf.errIdx {
 				return true
 			}
+			e.handleJSONMarshal(pass, ce, fn.FullName(), jf, evaluateMarshalErrorTarget(as.Lhs[jf.errIdx]))
 			return false
 		})
 	}
@@ -115,21 +110,52 @@ const (
 	functionArgument          // the returned error from the JSON marshal function is passed to an other function as argument.
 )
 
-func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fnName string, errorTarget marshalErrorTarget, omitSafe bool) {
-	t := pass.TypesInfo.TypeOf(ce.Args[0])
-	if t == nil {
-		// Not sure, if this is at all possible
-		if errorTarget == blankIdentifier {
-			pass.Reportf(ce.Pos(), "Type of argument to `%s` could not be evaluated and error return value is not checked", fnName)
-		}
+// jsonFunc describes a JSON encoding function, which is checked by errchkjson.
+type jsonFunc struct {
+	argIdx         int  // index of the argument, which is encoded to JSON.
+	errIdx         int  // index of the error in the returned values.
+	alwaysOmitSafe bool // the function may return errors not related to the encoded type (e.g. from an io.Writer).
+	v2             bool // the function is part of encoding/json/v2.
+}
+
+var jsonFuncs = map[string]jsonFunc{
+	"encoding/json.Marshal":           {argIdx: 0, errIdx: 1},
+	"encoding/json.MarshalIndent":     {argIdx: 0, errIdx: 1},
+	"(*encoding/json.Encoder).Encode": {argIdx: 0, errIdx: 0, alwaysOmitSafe: true},
+	"encoding/json/v2.Marshal":        {argIdx: 0, errIdx: 1, v2: true},
+	"encoding/json/v2.MarshalWrite":   {argIdx: 1, errIdx: 0, alwaysOmitSafe: true, v2: true},
+	"encoding/json/v2.MarshalEncode":  {argIdx: 1, errIdx: 0, alwaysOmitSafe: true, v2: true},
+}
+
+func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fnName string, jf jsonFunc, errorTarget marshalErrorTarget) {
+	if len(ce.Args) <= jf.argIdx {
 		return
 	}
 
-	if _, ok := t.(*types.Pointer); ok {
-		t = t.(*types.Pointer).Elem()
+	omitSafe := e.omitSafe || jf.alwaysOmitSafe
+
+	var err error
+	if jf.v2 && len(ce.Args) > jf.argIdx+1 {
+		// Options (e.g. json.WithMarshalers) can change the encoding of any type,
+		// therefore the safety of the encoding can not be determined.
+		err = fmt.Errorf("options passed, safety of the encoding can not be determined")
+	} else {
+		t := pass.TypesInfo.TypeOf(ce.Args[jf.argIdx])
+		if t == nil {
+			// Not sure, if this is at all possible
+			if errorTarget == blankIdentifier {
+				pass.Reportf(ce.Pos(), "Type of argument to `%s` could not be evaluated and error return value is not checked", fnName)
+			}
+			return
+		}
+
+		if _, ok := t.(*types.Pointer); ok {
+			t = t.(*types.Pointer).Elem()
+		}
+
+		err = e.jsonSafe(t, 0, map[types.Type]struct{}{}, jf.v2)
 	}
 
-	err := e.jsonSafe(t, 0, map[types.Type]struct{}{})
 	if err != nil {
 		if _, ok := err.(unsupported); ok {
 			pass.Reportf(ce.Pos(), "`%s` for %v", fnName, err)
@@ -158,20 +184,33 @@ const (
 	unsupportedBasicTypes   = types.IsComplex
 )
 
-func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]struct{}) error {
+// jsonSafe checks, if encoding a value of type t to JSON can fail. If v2 is
+// true, the rules of encoding/json/v2 are applied.
+func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]struct{}, v2 bool) error {
 	if _, ok := seenTypes[t]; ok {
 		return nil
 	}
 
-	if types.Implements(t, textMarshalerInterface()) || types.Implements(t, jsonMarshalerInterface()) {
+	if implementsMarshaler(t) {
+		return fmt.Errorf("unsafe type `%s` found", t.String())
+	}
+
+	// In encoding/json/v2, time.Duration has no default representation.
+	if v2 && isTimeDuration(t) {
 		return fmt.Errorf("unsafe type `%s` found", t.String())
 	}
 
 	switch ut := t.Underlying().(type) {
 	case *types.Basic:
 		if ut.Info()&allowedBasicTypes > 0 { // bool, int-family, string
-			if ut.Info()&types.IsString > 0 && t.String() == "encoding/json.Number" {
-				return fmt.Errorf("unsafe type `%s` found", t.String())
+			if ut.Info()&types.IsString > 0 {
+				if t.String() == "encoding/json.Number" {
+					return fmt.Errorf("unsafe type `%s` found", t.String())
+				}
+				// encoding/json/v2 rejects strings containing invalid UTF-8.
+				if v2 {
+					return fmt.Errorf("unsafe type `%s` found", t.String())
+				}
 			}
 			return nil
 		}
@@ -189,14 +228,14 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 		}
 
 	case *types.Array:
-		err := e.jsonSafe(ut.Elem(), level+1, seenTypes)
+		err := e.jsonSafe(ut.Elem(), level+1, seenTypes, v2)
 		if err != nil {
 			return err
 		}
 		return nil
 
 	case *types.Slice:
-		err := e.jsonSafe(ut.Elem(), level+1, seenTypes)
+		err := e.jsonSafe(ut.Elem(), level+1, seenTypes, v2)
 		if err != nil {
 			return err
 		}
@@ -205,18 +244,47 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 	case *types.Struct:
 		seenTypes[t] = struct{}{}
 		exported := 0
+		unexported := 0
+		names := map[string]struct{}{}
 		for i := 0; i < ut.NumFields(); i++ {
-			if !ut.Field(i).Exported() {
+			field := ut.Field(i)
+			if !field.Exported() {
 				// Unexported fields can be ignored
+				if !field.Embedded() {
+					unexported++
+				}
 				continue
 			}
-			if tag, ok := reflect.StructTag(ut.Tag(i)).Lookup("json"); ok {
-				if tag == "-" {
-					// Fields omitted in json can be ignored
-					continue
+			tag, _ := reflect.StructTag(ut.Tag(i)).Lookup("json")
+			if tag == "-" {
+				// Fields omitted in json can be ignored
+				continue
+			}
+			name, options := parseJSONTag(tag)
+			for _, option := range options {
+				// Since Go 1.27, the `format` option is rejected by encoding/json
+				// and encoding/json/v2 unless it is supported for the given type.
+				if strings.HasPrefix(option, "format:") {
+					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
+				}
+				// encoding/json/v2 rejects the `string` option on non-numeric types.
+				if v2 && option == "string" && !isNumeric(field.Type()) {
+					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
 				}
 			}
-			err := e.jsonSafe(ut.Field(i).Type(), level+1, seenTypes)
+			// encoding/json/v2 rejects structs with conflicting JSON object names.
+			// Only the direct fields are considered, conflicts through embedded
+			// structs are not detected.
+			if v2 && (!field.Embedded() || name != "") {
+				if name == "" {
+					name = field.Name()
+				}
+				if _, ok := names[name]; ok {
+					return fmt.Errorf("unsafe duplicate JSON object name `%s` in struct `%s` found", name, t.String())
+				}
+				names[name] = struct{}{}
+			}
+			err := e.jsonSafe(field.Type(), level+1, seenTypes, v2)
 			if err != nil {
 				return err
 			}
@@ -225,21 +293,25 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 		if e.reportNoExported && level == 0 && exported == 0 {
 			return newNoexportedError(fmt.Errorf("struct does not export any field"))
 		}
+		// encoding/json/v2 rejects structs with unexported but without exported fields.
+		if v2 && exported == 0 && unexported > 0 {
+			return fmt.Errorf("unsafe struct `%s` without exported fields found", t.String())
+		}
 		return nil
 
 	case *types.Pointer:
-		err := e.jsonSafe(ut.Elem(), level+1, seenTypes)
+		err := e.jsonSafe(ut.Elem(), level+1, seenTypes, v2)
 		if err != nil {
 			return err
 		}
 		return nil
 
 	case *types.Map:
-		err := jsonSafeMapKey(ut.Key())
+		err := jsonSafeMapKey(ut.Key(), v2)
 		if err != nil {
 			return err
 		}
-		err = e.jsonSafe(ut.Elem(), level+1, seenTypes)
+		err = e.jsonSafe(ut.Elem(), level+1, seenTypes, v2)
 		if err != nil {
 			return err
 		}
@@ -255,17 +327,21 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 	}
 }
 
-func jsonSafeMapKey(t types.Type) error {
-	if types.Implements(t, textMarshalerInterface()) || types.Implements(t, jsonMarshalerInterface()) {
+func jsonSafeMapKey(t types.Type, v2 bool) error {
+	if implementsMarshaler(t) || (v2 && isTimeDuration(t)) {
 		return fmt.Errorf("unsafe type `%s` as map key found", t.String())
 	}
 	switch ut := t.Underlying().(type) {
 	case *types.Basic:
-		if ut.Info()&types.IsString > 0 && t.String() == "encoding/json.Number" {
+		if ut.Info()&types.IsString > 0 && (t.String() == "encoding/json.Number" || v2) {
 			return fmt.Errorf("unsafe type `%s` as map key found", t.String())
 		}
-		if ut.Info()&allowedMapKeyBasicTypes > 0 { // bool, int-family, string
+		if ut.Info()&allowedMapKeyBasicTypes > 0 { // int-family, string
 			return nil
+		}
+		// encoding/json/v2 supports float map keys, but NaN and Inf values fail.
+		if v2 && ut.Info()&types.IsFloat > 0 {
+			return fmt.Errorf("unsafe type `%s` as map key found", t.String())
 		}
 		// E.g. bool, float32, float64, complex64, complex128
 		return newUnsupportedError(fmt.Errorf("unsupported type `%s` as map key found", t.String()))
@@ -275,6 +351,60 @@ func jsonSafeMapKey(t types.Type) error {
 		// E.g. struct composed solely of basic types, that are comparable
 		return newUnsupportedError(fmt.Errorf("unsupported type `%s` as map key found", t.String()))
 	}
+}
+
+// parseJSONTag splits a json struct tag into the name and the options.
+func parseJSONTag(tag string) (string, []string) {
+	// encoding/json/v2 allows the name to be single quoted, in which case it
+	// may contain commas.
+	if strings.HasPrefix(tag, "'") {
+		if end := strings.Index(tag[1:], "'"); end >= 0 {
+			name := tag[1 : end+1]
+			rest := tag[end+2:]
+			if !strings.HasPrefix(rest, ",") {
+				return name, nil
+			}
+			return name, strings.Split(rest[1:], ",")
+		}
+	}
+	name, rest, found := strings.Cut(tag, ",")
+	if !found {
+		return name, nil
+	}
+	return name, strings.Split(rest, ",")
+}
+
+// isNumeric reports, if t (after dereferencing pointers) is an integer or
+// float type.
+func isNumeric(t types.Type) bool {
+	for {
+		p, ok := t.Underlying().(*types.Pointer)
+		if !ok {
+			break
+		}
+		t = p.Elem()
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Info()&(types.IsInteger|types.IsFloat) > 0
+}
+
+// isTimeDuration reports, if t is time.Duration.
+func isTimeDuration(t types.Type) bool {
+	n, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := n.Obj()
+	return obj.Pkg() != nil && obj.Pkg().Path() == "time" && obj.Name() == "Duration"
+}
+
+// implementsMarshaler reports, if t implements one of the interfaces, which
+// allow a type to customize its JSON encoding (and therefore may return an error).
+func implementsMarshaler(t types.Type) bool {
+	return types.Implements(t, textMarshalerInterface()) ||
+		types.Implements(t, jsonMarshalerInterface()) ||
+		types.Implements(t, textAppenderInterface()) ||
+		implementsJSONMarshalerTo(t)
 }
 
 func (e *errchkjson) inspectArgs(pass *analysis.Pass, args []ast.Expr) {
@@ -294,12 +424,9 @@ func (e *errchkjson) inspectArgs(pass *analysis.Pass, args []ast.Expr) {
 				return true
 			}
 
-			switch fn.FullName() {
-			case "encoding/json.Marshal", "encoding/json.MarshalIndent":
-				e.handleJSONMarshal(pass, ce, fn.FullName(), functionArgument, e.omitSafe)
-			case "(*encoding/json.Encoder).Encode":
-				e.handleJSONMarshal(pass, ce, fn.FullName(), functionArgument, true)
-			default:
+			if jf, ok := jsonFuncs[fn.FullName()]; ok {
+				e.handleJSONMarshal(pass, ce, fn.FullName(), jf, functionArgument)
+			} else {
 				e.inspectArgs(pass, ce.Args)
 			}
 			return false
@@ -345,4 +472,58 @@ func jsonMarshalerInterface() *types.Interface {
 	textMarshalerInterface.Complete()
 
 	return textMarshalerInterface
+}
+
+// Construct *types.Interface for interface encoding.TextAppender
+//
+//	type TextAppender interface {
+//	    AppendText(b []byte) ([]byte, error)
+//	}
+func textAppenderInterface() *types.Interface {
+	byteSlice := types.NewSlice(types.Universe.Lookup("byte").Type())
+	textAppenderInterface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "AppendText", types.NewSignatureType(
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "b", byteSlice)),
+			types.NewTuple(
+				types.NewVar(token.NoPos, nil, "", byteSlice),
+				types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)),
+	}, nil)
+	textAppenderInterface.Complete()
+
+	return textAppenderInterface
+}
+
+// implementsJSONMarshalerTo reports, if t implements the interface
+// encoding/json/v2.MarshalerTo. Since encoding/json/jsontext can not be imported
+// (it is only available as of Go 1.27), the method is checked by name and
+// signature.
+//
+//	type MarshalerTo interface {
+//	    MarshalJSONTo(*jsontext.Encoder) error
+//	}
+func implementsJSONMarshalerTo(t types.Type) bool {
+	obj, _, _ := types.LookupFieldOrMethod(t, false, nil, "MarshalJSONTo")
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return false
+	}
+	sig := fn.Signature()
+	if sig.Params().Len() != 1 || sig.Results().Len() != 1 {
+		return false
+	}
+	if !types.Identical(sig.Results().At(0).Type(), types.Universe.Lookup("error").Type()) {
+		return false
+	}
+	ptr, ok := sig.Params().At(0).Type().(*types.Pointer)
+	if !ok {
+		return false
+	}
+	named, ok := types.Unalias(ptr.Elem()).(*types.Named)
+	if !ok {
+		return false
+	}
+	obj2 := named.Obj()
+	return obj2.Pkg() != nil && obj2.Pkg().Path() == "encoding/json/jsontext" && obj2.Name() == "Encoder"
 }

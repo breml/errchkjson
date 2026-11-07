@@ -114,6 +114,39 @@ Forbidden basic types:
 Any composed types (struct, map, slice, array) containing a forbidden basic type. Any map
 using a key with a forbidden type (`bool`, `float32`, `float64`, `struct`).
 
+### Go 1.27 and later
+
+As of Go 1.27, [`encoding/json`](https://pkg.go.dev/encoding/json) is implemented on top of
+[`encoding/json/v2`](https://pkg.go.dev/encoding/json/v2). The behavior of `encoding/json` therefore
+depends on the Go version (and `GOEXPERIMENT`) used to build a program. `errchkjson` can not know this
+and therefore considers a type unsafe, if encoding it can fail with any supported Go version.
+In addition to the above rules, the following is considered unsafe:
+
+* Types implementing the `MarshalJSONTo(*jsontext.Encoder) error` method (`json.MarshalerTo` of `encoding/json/v2`)
+  or the `encoding.TextAppender` interface.
+* Struct fields with the `format` option in the `json` struct tag (e.g. `json:"when,format:RFC3339"`).
+
+## encoding/json/v2
+
+`errchkjson` also checks the functions `Marshal`, `MarshalWrite` and `MarshalEncode` of
+[`encoding/json/v2`](https://pkg.go.dev/encoding/json/v2). The rules for safe, unsafe and forbidden
+types are the same as above, with the following differences:
+
+* `string` (including named string types and string map keys) is unsafe, because `encoding/json/v2`
+  returns an error for strings containing invalid UTF-8.
+* `time.Duration` is unsafe, because it has no default representation in `encoding/json/v2`.
+* Float map keys (e.g. `map[float64]string`) are unsafe instead of forbidden.
+* Struct fields with the `string` option in the `json` struct tag are unsafe, if the type of the field is
+  not numeric.
+* Structs with conflicting JSON object names of their direct fields are unsafe (conflicts through
+  embedded structs are not detected).
+* Structs without exported fields but with unexported fields are unsafe.
+* If options are passed to the function (e.g. `json.WithMarshalers`), the encoding of any type can
+  be changed and the call is therefore always considered unsafe.
+
+Because `MarshalWrite` and `MarshalEncode` may return errors unrelated to the encoded type (e.g. from the
+`io.Writer`), their returned error is never reported as safe to omit, similar to `(*encoding/json.Encoder).Encode`.
+
 ## Accepted edge case
 
 For `encoding/json.MarshalIndent`, there is a (pathological) edge case, where this
