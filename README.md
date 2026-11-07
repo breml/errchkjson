@@ -140,8 +140,9 @@ types are the same as above, with the following differences:
 * Float map keys (e.g. `map[float64]string`) are unsafe instead of forbidden.
 * Struct fields with the `string` option in the `json` struct tag are unsafe, if the type of the field is
   not numeric.
-* Structs with conflicting JSON object names of their direct fields are unsafe (conflicts through
-  embedded structs are not detected).
+* Structs with two or more direct fields using the same JSON object name are unsafe. Conflicts with
+  fields promoted from embedded structs are not an error, because `encoding/json/v2` resolves them
+  using the Go embedding rules (the less nested field wins, ambiguous fields are ignored).
 * Structs with fields, but without any exported field and without any `json` struct tag, are unsafe.
 * Struct fields with a JSON object name containing a backslash or quote characters (e.g. `json:"'name'"`) are unsafe.
 * Unexported struct fields with a `json` struct tag other than `json:"-"` are unsafe.

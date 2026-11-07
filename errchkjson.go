@@ -286,9 +286,10 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
 				}
 			}
-			// encoding/json/v2 rejects structs with conflicting JSON object names.
-			// Only the direct fields are considered, conflicts through embedded
-			// structs are not detected.
+			// encoding/json/v2 rejects structs, where two direct fields use the
+			// same JSON object name. Conflicts with fields promoted from embedded
+			// structs (without an explicit name) are not an error, they are
+			// resolved by the Go embedding rules.
 			if v2 && (!field.Embedded() || name != "") {
 				if name == "" {
 					name = field.Name()
