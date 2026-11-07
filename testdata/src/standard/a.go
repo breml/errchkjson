@@ -727,6 +727,22 @@ func JSONMarshalGo127() {
 	_, err = json.Marshal(v2OnlyDuration) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
 
+	// encoding/json ignores malformed and unknown json struct tag options.
+	var v2OnlyTagOptions struct {
+		A int `json:"a,"`
+		B int `json:",omitEmpty"`
+		C int `json:",omitempty,omitempty"`
+		D int `json:",case:foo"`
+		E int `json:",format"`
+		F int `json:",embed"`
+	}
+	_, err = json.Marshal(v2OnlyTagOptions) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var v2OnlyPtrMapKey map[*int]int
+	_, err = json.Marshal(v2OnlyPtrMapKey) // want "`encoding/json.Marshal` for unsupported type `\\*int` as map key found"
+	_ = err
+
 	var v2OnlyNoExported struct {
 		a int
 	}

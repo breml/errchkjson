@@ -708,6 +708,166 @@ func writerBoolAndOptions() (io.Writer, bool, json.Options) {
 	return io.Discard, true, json.Deterministic(true)
 }
 
+// JSONv2MarshalTagOptions contains test cases for json struct tag options,
+// which are rejected by encoding/json/v2.
+func JSONv2MarshalTagOptions() {
+	var err error
+
+	var trailingComma struct {
+		A int `json:"a,"`
+	}
+	_, _ = json.Marshal(trailingComma) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `` on field `A` found: malformed option"
+	var emptyOption struct {
+		A int `json:"a,,omitempty"`
+	}
+	_, _ = json.Marshal(emptyOption) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `` on field `A` found: malformed option"
+	var quotedOption struct {
+		A int `json:",'omitempty'"`
+	}
+	_, _ = json.Marshal(quotedOption) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `'omitempty'` on field `A` found: malformed option"
+	var optionWithValue struct {
+		A int `json:",omitempty:x"`
+	}
+	_, _ = json.Marshal(optionWithValue) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `omitempty:x` on field `A` found: malformed option"
+	var misspelledOption struct {
+		A int `json:",omitEmpty"`
+	}
+	_, _ = json.Marshal(misspelledOption) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `omitEmpty` on field `A` found: invalid spelling of `omitempty`"
+	var underscoreOption struct {
+		A int `json:",omit_empty"`
+	}
+	_, _ = json.Marshal(underscoreOption) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `omit_empty` on field `A` found: invalid spelling of `omitempty`"
+	var upperCaseOption struct {
+		A int `json:",OMITZERO"`
+	}
+	_, _ = json.Marshal(upperCaseOption) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `OMITZERO` on field `A` found: invalid spelling of `omitzero`"
+	var duplicateOption struct {
+		A int `json:",omitempty,omitempty"`
+	}
+	_, _ = json.Marshal(duplicateOption) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `omitempty` on field `A` found: duplicate option"
+	var caseUnknown struct {
+		A int `json:",case:foo"`
+	}
+	_, _ = json.Marshal(caseUnknown) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `case:foo` on field `A` found: invalid value, only `case:ignore` and `case:strict` are supported"
+	var caseMissing struct {
+		A int `json:",case"`
+	}
+	_, _ = json.Marshal(caseMissing) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `case` on field `A` found: invalid value, only `case:ignore` and `case:strict` are supported"
+	var caseBoth struct {
+		A int `json:",case:ignore,case:strict"`
+	}
+	_, _ = json.Marshal(caseBoth) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `case:strict` on field `A` found: duplicate option"
+	var formatMissing struct {
+		A int `json:",format"`
+	}
+	_, _ = json.Marshal(formatMissing) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `format` on field `A` found: `format` is not supported"
+	var embedInt struct {
+		A int `json:",embed"`
+	}
+	_, _ = json.Marshal(embedInt) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `A` found: type `int` must be a struct, a map with string key or jsontext.Value"
+	var embedSlice struct {
+		A []int `json:",embed"`
+	}
+	_, _ = json.Marshal(embedSlice) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `A` found: type `\\[\\]int` must be a struct, a map with string key or jsontext.Value"
+	var embedOmitzero struct {
+		F inner `json:",embed,omitzero"`
+	}
+	_, _ = json.Marshal(embedOmitzero) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `F` found: option `omitzero` is not allowed, only `embed` is supported"
+	var embedNamed struct {
+		inner `json:"x,embed"`
+	}
+	_, _ = json.Marshal(embedNamed) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `inner` found: JSON object name `x` is not allowed"
+	var embeddedOmitempty struct {
+		inner `json:",omitempty"`
+	}
+	_, _ = json.Marshal(embeddedOmitempty) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `inner` found: option `omitempty` is not allowed, only `embed` is supported"
+	var embeddedCase struct {
+		inner `json:",case:ignore"`
+	}
+	_, _ = json.Marshal(embeddedCase)    // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `inner` found: option `case` is not allowed, only `embed` is supported"
+	_, err = json.Marshal(trailingComma) // err is checked
+	_ = err
+	_, err = stdjson.Marshal(trailingComma) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+	_, err = stdjson.Marshal(misspelledOption) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+	_, err = stdjson.Marshal(embedInt) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// Unknown options are ignored by encoding/json/v2.
+	var unknownOption struct {
+		A int `json:",foo"`
+	}
+	_, err = json.Marshal(unknownOption) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	var unknownOptionUnderscore struct {
+		A int `json:",foo_bar"`
+	}
+	_, err = json.Marshal(unknownOptionUnderscore) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	var caseIgnore struct {
+		A int `json:",case:ignore"`
+	}
+	_, err = json.Marshal(caseIgnore) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	var caseStrict struct {
+		A int `json:"a,case:strict,omitempty"`
+	}
+	_, err = json.Marshal(caseStrict) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	var omitemptyOmitzero struct {
+		A int `json:",omitempty,omitzero"`
+	}
+	_, err = json.Marshal(omitemptyOmitzero) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	var embedStruct struct {
+		F inner `json:",embed"`
+		G int   `json:"F"`
+	}
+	_, err = json.Marshal(embedStruct) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	var embedStructPtr struct {
+		F *inner `json:",embed"`
+	}
+	_, err = json.Marshal(embedStructPtr) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	var embeddedUnknownOption struct {
+		inner `json:",foo"`
+	}
+	_, err = json.Marshal(embeddedUnknownOption) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	var embeddedEmbedOption struct {
+		inner `json:",embed"`
+	}
+	_, err = json.Marshal(embeddedEmbedOption) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+}
+
+// JSONv2MarshalPointerMapKey contains test cases for pointer map keys, which
+// are encoded like the pointed to value by encoding/json/v2.
+func JSONv2MarshalPointerMapKey() {
+	var err error
+
+	var mapPtrInt map[*int]int
+	_, _ = json.Marshal(mapPtrInt)   // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `\\*int` as map key found"
+	_, err = json.Marshal(mapPtrInt) // err is checked
+	_ = err
+
+	var mapPtrNamedString map[*namedString]int
+	_, _ = json.Marshal(mapPtrNamedString) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `\\*jsonv2.namedString` as map key found"
+
+	var mapPtrBool map[*bool]int
+	_, err = json.Marshal(mapPtrBool) // want "`encoding/json/v2.Marshal` for unsupported type `bool` as map key found"
+	_ = err
+
+	var mapPtrStruct map[*structKey]int
+	_, err = json.Marshal(mapPtrStruct) // want "`encoding/json/v2.Marshal` for unsupported type `jsonv2.structKey` as map key found"
+	_ = err
+
+	_, err = stdjson.Marshal(mapPtrInt) // want "`encoding/json.Marshal` for unsupported type `\\*int` as map key found"
+	_ = err
+}
+
 // JSONv2MarshalErrorTargets contains test cases for the different ways the
 // returned error is handled.
 func JSONv2MarshalErrorTargets() {

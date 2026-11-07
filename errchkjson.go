@@ -9,7 +9,10 @@ import (
 	"go/token"
 	"go/types"
 	"reflect"
+	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/types/typeutil"
@@ -332,11 +335,27 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
 				}
 			}
+			// Fields embedded by encoding/json/v2: embedded struct fields without
+			// a JSON name and fields with the `embed` option.
+			embed := false
+			if v2 {
+				seenOptions, option, err := checkJSONTagOptionsV2(options)
+				if err != nil {
+					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found: %v", option, field.Name(), err)
+				}
+				embed = seenOptions["embed"] || (field.Embedded() && name == "")
+				if embed {
+					err = checkJSONEmbedV2(field.Type(), name, seenOptions)
+					if err != nil {
+						return fmt.Errorf("unsafe embedded field `%s` found: %v", field.Name(), err)
+					}
+				}
+			}
 			// encoding/json/v2 rejects structs, where two direct fields use the
 			// same JSON object name. Conflicts with fields promoted from embedded
 			// structs (without an explicit name) are not an error, they are
 			// resolved by the Go embedding rules.
-			if v2 && (!field.Embedded() || name != "") {
+			if v2 && !embed {
 				if name == "" {
 					name = field.Name()
 				}
@@ -411,10 +430,118 @@ func jsonSafeMapKey(t types.Type, v2 bool) error {
 		return newUnsupportedError(fmt.Errorf("unsupported type `%s` as map key found", t.String()))
 	case *types.Interface:
 		return fmt.Errorf("unsafe type `%s` as map key found", t.String())
+	case *types.Pointer:
+		if !v2 {
+			return newUnsupportedError(fmt.Errorf("unsupported type `%s` as map key found", t.String()))
+		}
+		// encoding/json/v2 encodes pointer map keys like the pointed to
+		// value, but fails for nil pointers.
+		err := jsonSafeMapKey(ut.Elem(), v2)
+		if _, ok := err.(unsupported); ok {
+			return err
+		}
+		return fmt.Errorf("unsafe type `%s` as map key found", t.String())
 	default:
 		// E.g. struct composed solely of basic types, that are comparable
 		return newUnsupportedError(fmt.Errorf("unsupported type `%s` as map key found", t.String()))
 	}
+}
+
+// jsonTagOptionsV2 are the json struct tag options known by encoding/json/v2.
+var jsonTagOptionsV2 = []string{"case", "embed", "omitzero", "omitempty", "string", "format"}
+
+// checkJSONTagOptionsV2 checks the json struct tag options (as returned by
+// parseJSONTag) according to the rules of encoding/json/v2. It returns the
+// set of known options. If encoding/json/v2 rejects an option, the raw option
+// and an error are returned. Unknown options are ignored by encoding/json/v2.
+func checkJSONTagOptionsV2(options []string) (map[string]bool, string, error) {
+	seen := map[string]bool{}
+	for _, option := range options {
+		// Options are Go identifiers, optionally followed by `:value` for
+		// the `case` and `format` options.
+		ident := ""
+		if r, _ := utf8.DecodeRuneInString(option); r == '_' || unicode.IsLetter(r) {
+			ident = option[:len(option)-len(strings.TrimLeftFunc(option, isLetterOrDigit))]
+		}
+		rest := option[len(ident):]
+
+		switch ident {
+		case "":
+			// E.g. trailing comma, empty or quoted option.
+			return nil, option, fmt.Errorf("malformed option")
+		case "case":
+			if rest != ":ignore" && rest != ":strict" {
+				return nil, option, fmt.Errorf("invalid value, only `case:ignore` and `case:strict` are supported")
+			}
+		case "format":
+			// Since Go 1.27, the `format` option is rejected for all types.
+			return nil, option, fmt.Errorf("`format` is not supported")
+		default:
+			if rest != "" {
+				return nil, option, fmt.Errorf("malformed option")
+			}
+			// encoding/json/v2 rejects options resembling a known option
+			// (e.g. `omitEmpty` or `omit_empty`).
+			normalized := strings.ReplaceAll(strings.ToLower(ident), "_", "")
+			if normalized != ident && slices.Contains(jsonTagOptionsV2, normalized) {
+				return nil, option, fmt.Errorf("invalid spelling of `%s`", normalized)
+			}
+		}
+
+		if seen[ident] {
+			return nil, option, fmt.Errorf("duplicate option")
+		}
+		if slices.Contains(jsonTagOptionsV2, ident) {
+			seen[ident] = true
+		}
+	}
+	return seen, "", nil
+}
+
+// checkJSONEmbedV2 checks a field, which is embedded by encoding/json/v2
+// (embedded struct without JSON name or field with the `embed` option),
+// according to the rules of encoding/json/v2.
+func checkJSONEmbedV2(t types.Type, name string, options map[string]bool) error {
+	if name != "" {
+		return fmt.Errorf("JSON object name `%s` is not allowed", name)
+	}
+	for _, option := range jsonTagOptionsV2 {
+		if option != "embed" && options[option] {
+			return fmt.Errorf("option `%s` is not allowed, only `embed` is supported", option)
+		}
+	}
+
+	// Pointers to the embedded type are allowed.
+	if p, ok := types.Unalias(t).(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if isJSONTextValue(t) {
+		return nil
+	}
+	switch ut := t.Underlying().(type) {
+	case *types.Struct:
+		return nil
+	case *types.Map:
+		if b, ok := ut.Key().Underlying().(*types.Basic); ok && b.Info()&types.IsString > 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("type `%s` must be a struct, a map with string key or jsontext.Value", t.String())
+}
+
+// isJSONTextValue reports, if t is encoding/json/jsontext.Value.
+func isJSONTextValue(t types.Type) bool {
+	n, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := n.Obj()
+	return obj.Pkg() != nil && obj.Pkg().Path() == "encoding/json/jsontext" && obj.Name() == "Value"
+}
+
+// isLetterOrDigit reports, if r is allowed in a json struct tag option.
+func isLetterOrDigit(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
 // parseJSONTag splits a json struct tag into the name and the options.

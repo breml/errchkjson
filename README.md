@@ -137,7 +137,8 @@ types are the same as above, with the following differences:
 * `time.Duration` is unsafe, because it has no default representation in `encoding/json/v2`.
 * Types, which implement one of the marshaler interfaces with a pointer receiver (e.g. `func (*T) MarshalJSON() ([]byte, error)`),
   are unsafe, even if they are passed by value, because `encoding/json/v2` always calls these methods.
-* Float map keys (e.g. `map[float64]string`) are unsafe instead of forbidden.
+* Float map keys (e.g. `map[float64]string`) and pointer map keys (e.g. `map[*int]string`) are unsafe
+  instead of forbidden.
 * Struct fields with the `string` option in the `json` struct tag are unsafe, if the type of the field is
   not numeric.
 * Structs with two or more direct fields using the same JSON object name are unsafe. Conflicts with
@@ -148,6 +149,12 @@ types are the same as above, with the following differences:
 * Unexported struct fields with a `json` struct tag other than `json:"-"` are unsafe.
 * Embedded fields of non-struct types (e.g. `type MyInt int` or an interface) are unsafe, if they are
   not explicitly given a JSON name (e.g. `json:"name"`) or if their type is unexported.
+* Struct fields with malformed or misspelled options in the `json` struct tag are unsafe, e.g. a trailing
+  comma (`json:"name,"`), `omitEmpty`, duplicate options, `case` with a value other than `ignore` or `strict`
+  or `format`. Unknown options are ignored by `encoding/json/v2` and are therefore not reported.
+* Embedded fields (embedded structs without a JSON name or fields with the `embed` option) are unsafe, if
+  they have a JSON name or options other than `embed`, or if their type is not a struct, a map with a
+  string key or `jsontext.Value`.
 * If options are passed to the function (e.g. `json.WithMarshalers`), the encoding of any type can
   be changed and the call is therefore always considered unsafe.
 
