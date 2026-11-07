@@ -265,6 +265,12 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 			}
 			if !isExported {
 				if field.Embedded() {
+					// encoding/json/v2 rejects embedded fields of unexported
+					// non-struct types (with or without a JSON name). Embedded
+					// structs of unexported types are handled above.
+					if v2 {
+						return fmt.Errorf("unsafe embedded field `%s` of unexported non-struct type found", field.Name())
+					}
 					// Embedded fields of unexported types may still forward
 					// exported fields.
 					hasAnyJSONField = true
@@ -282,6 +288,11 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 			// or quote characters (including single-quoted names).
 			if v2 && strings.ContainsAny(name, "\\'\"`") {
 				return fmt.Errorf("unsafe JSON object name `%s` on field `%s` found", name, field.Name())
+			}
+			// encoding/json/v2 rejects embedded fields of non-struct types
+			// (e.g. named basic types, slices or interfaces) without a JSON name.
+			if v2 && field.Embedded() && name == "" && !isStruct(field.Type()) {
+				return fmt.Errorf("unsafe embedded field `%s` of non-struct type without JSON name found", field.Name())
 			}
 			for _, option := range options {
 				// Since Go 1.27, the `format` option is rejected by encoding/json

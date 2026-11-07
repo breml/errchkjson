@@ -71,6 +71,14 @@ type innerDuration struct {
 	D time.Duration
 }
 
+type EmbeddedInt int
+
+type embeddedInt int
+
+type EmbeddedSlice []int
+
+type EmbeddedIface interface{ M() }
+
 type structKey struct{ id int }
 
 type unexportedOnly struct {
@@ -404,6 +412,68 @@ func JSONv2MarshalUnsafeTypes() {
 	}
 	_, err = json.Marshal(embeddedIgnored) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
 	_ = err
+
+	// encoding/json/v2 rejects embedded fields of non-struct types without a
+	// JSON name and embedded fields of unexported non-struct types.
+	var embeddedNonStruct struct {
+		EmbeddedInt
+	}
+	_, _ = json.Marshal(embeddedNonStruct)   // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `EmbeddedInt` of non-struct type without JSON name found"
+	_, err = json.Marshal(embeddedNonStruct) // err is checked
+	_ = err
+	_, err = stdjson.Marshal(embeddedNonStruct) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var embeddedNonStructPtr struct {
+		*EmbeddedInt
+	}
+	_, _ = json.Marshal(embeddedNonStructPtr) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `EmbeddedInt` of non-struct type without JSON name found"
+
+	var embeddedNonStructOption struct {
+		EmbeddedInt `json:",omitempty"`
+	}
+	_, _ = json.Marshal(embeddedNonStructOption) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `EmbeddedInt` of non-struct type without JSON name found"
+
+	var embeddedSlice struct {
+		EmbeddedSlice
+	}
+	_, _ = json.Marshal(embeddedSlice) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `EmbeddedSlice` of non-struct type without JSON name found"
+
+	var embeddedIface struct {
+		EmbeddedIface
+	}
+	_, _ = json.Marshal(embeddedIface) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `EmbeddedIface` of non-struct type without JSON name found"
+
+	var embeddedNonStructNamed struct {
+		EmbeddedInt `json:"i"`
+	}
+	_, err = json.Marshal(embeddedNonStructNamed) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var embeddedUnexportedNonStruct struct {
+		embeddedInt
+		B int
+	}
+	_, _ = json.Marshal(embeddedUnexportedNonStruct)      // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `embeddedInt` of unexported non-struct type found"
+	_, err = stdjson.Marshal(embeddedUnexportedNonStruct) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var embeddedUnexportedNonStructNamed struct {
+		embeddedInt `json:"i"`
+	}
+	_, _ = json.Marshal(embeddedUnexportedNonStructNamed) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `embeddedInt` of unexported non-struct type found"
+
+	var embeddedUnexportedNonStructIgnored struct {
+		embeddedInt `json:"-"`
+		B           int
+	}
+	_, err = json.Marshal(embeddedUnexportedNonStructIgnored) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var embeddedError struct {
+		error
+	}
+	_, _ = json.Marshal(embeddedError) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `error` of unexported non-struct type found"
 
 	var nestedUnexportedOnly struct {
 		Inner unexportedOnly `json:"inner"`

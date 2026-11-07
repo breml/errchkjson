@@ -146,6 +146,8 @@ types are the same as above, with the following differences:
 * Structs with fields, but without any exported field and without any `json` struct tag, are unsafe.
 * Struct fields with a JSON object name containing a backslash or quote characters (e.g. `json:"'name'"`) are unsafe.
 * Unexported struct fields with a `json` struct tag other than `json:"-"` are unsafe.
+* Embedded fields of non-struct types (e.g. `type MyInt int` or an interface) are unsafe, if they are
+  not explicitly given a JSON name (e.g. `json:"name"`) or if their type is unexported.
 * If options are passed to the function (e.g. `json.WithMarshalers`), the encoding of any type can
   be changed and the call is therefore always considered unsafe.
 
