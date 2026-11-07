@@ -244,23 +244,37 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 	case *types.Struct:
 		seenTypes[t] = struct{}{}
 		exported := 0
-		unexported := 0
+		hasAnyJSONTag := false   // any field has a json struct tag (including `json:"-"`).
+		hasAnyJSONField := false // any field is considered for encoding.
 		names := map[string]struct{}{}
 		for i := 0; i < ut.NumFields(); i++ {
 			field := ut.Field(i)
-			if !field.Exported() {
-				// Unexported fields can be ignored
-				if !field.Embedded() {
-					unexported++
-				}
-				continue
-			}
-			tag, _ := reflect.StructTag(ut.Tag(i)).Lookup("json")
+			tag, hasTag := reflect.StructTag(ut.Tag(i)).Lookup("json")
+			hasAnyJSONTag = hasAnyJSONTag || hasTag
 			if tag == "-" {
 				// Fields omitted in json can be ignored
 				continue
 			}
+			if !field.Exported() {
+				if field.Embedded() {
+					// Embedded fields of unexported types may still forward
+					// exported fields.
+					hasAnyJSONField = true
+				} else if v2 && hasTag {
+					// encoding/json/v2 rejects json struct tags (other than
+					// `json:"-"`) on unexported fields.
+					return fmt.Errorf("unsafe struct tag on unexported field `%s` found", field.Name())
+				}
+				// Otherwise, unexported fields are ignored.
+				continue
+			}
+			hasAnyJSONField = true
 			name, options := parseJSONTag(tag)
+			// encoding/json/v2 rejects JSON object names containing a backslash
+			// or quote characters (including single-quoted names).
+			if v2 && strings.ContainsAny(name, "\\'\"`") {
+				return fmt.Errorf("unsafe JSON object name `%s` on field `%s` found", name, field.Name())
+			}
 			for _, option := range options {
 				// Since Go 1.27, the `format` option is rejected by encoding/json
 				// and encoding/json/v2 unless it is supported for the given type.
@@ -293,8 +307,9 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 		if e.reportNoExported && level == 0 && exported == 0 {
 			return newNoexportedError(fmt.Errorf("struct does not export any field"))
 		}
-		// encoding/json/v2 rejects structs with unexported but without exported fields.
-		if v2 && exported == 0 && unexported > 0 {
+		// encoding/json/v2 rejects structs, which have fields, but neither a
+		// field considered for encoding nor any json struct tag.
+		if v2 && ut.NumFields() > 0 && !hasAnyJSONField && !hasAnyJSONTag {
 			return fmt.Errorf("unsafe struct `%s` without exported fields found", t.String())
 		}
 		return nil
@@ -355,18 +370,6 @@ func jsonSafeMapKey(t types.Type, v2 bool) error {
 
 // parseJSONTag splits a json struct tag into the name and the options.
 func parseJSONTag(tag string) (string, []string) {
-	// encoding/json/v2 allows the name to be single quoted, in which case it
-	// may contain commas.
-	if strings.HasPrefix(tag, "'") {
-		if end := strings.Index(tag[1:], "'"); end >= 0 {
-			name := tag[1 : end+1]
-			rest := tag[end+2:]
-			if !strings.HasPrefix(rest, ",") {
-				return name, nil
-			}
-			return name, strings.Split(rest[1:], ",")
-		}
-	}
 	name, rest, found := strings.Cut(tag, ",")
 	if !found {
 		return name, nil

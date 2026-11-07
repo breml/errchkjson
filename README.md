@@ -142,7 +142,9 @@ types are the same as above, with the following differences:
   not numeric.
 * Structs with conflicting JSON object names of their direct fields are unsafe (conflicts through
   embedded structs are not detected).
-* Structs without exported fields but with unexported fields are unsafe.
+* Structs with fields, but without any exported field and without any `json` struct tag, are unsafe.
+* Struct fields with a JSON object name containing a backslash or quote characters (e.g. `json:"'name'"`) are unsafe.
+* Unexported struct fields with a `json` struct tag other than `json:"-"` are unsafe.
 * If options are passed to the function (e.g. `json.WithMarshalers`), the encoding of any type can
   be changed and the call is therefore always considered unsafe.
 

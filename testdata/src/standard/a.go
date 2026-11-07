@@ -693,4 +693,20 @@ func JSONMarshalGo127() {
 	}
 	_, err = json.Marshal(v2Only) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
+
+	var v2OnlyTags struct {
+		Quoted    int `json:"'a,b'"`
+		Backslash int `json:"a\\b"`
+		tagged    int `json:"tagged"`
+	}
+	_ = v2OnlyTags.tagged
+	_, err = json.Marshal(v2OnlyTags) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var v2OnlyNoExported struct {
+		a int
+	}
+	_ = v2OnlyNoExported.a
+	_, err = json.Marshal(v2OnlyNoExported) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
 }

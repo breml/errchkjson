@@ -202,10 +202,47 @@ func JSONv2MarshalUnsafeTypes() {
 	}
 	_, _ = json.Marshal(formatTagDuration) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `format:nano` on field `D` found"
 
+	// encoding/json/v2 rejects JSON object names containing a backslash or
+	// quote characters, including single-quoted names.
 	var quotedName struct {
+		I int `json:"'a,b'"`
+	}
+	_, _ = json.Marshal(quotedName)   // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe JSON object name `'a` on field `I` found"
+	_, err = json.Marshal(quotedName) // err is checked
+	_ = err
+
+	var quotedNameOnly struct {
+		I int `json:"'a'"`
+	}
+	_, _ = json.Marshal(quotedNameOnly) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe JSON object name `'a'` on field `I` found"
+
+	var quotedNameFormat struct {
 		I int `json:"'a,b',format:foo"`
 	}
-	_, _ = json.Marshal(quotedName) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `format:foo` on field `I` found"
+	_, _ = json.Marshal(quotedNameFormat) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe JSON object name `'a` on field `I` found"
+
+	var quoteInName struct {
+		I int `json:"a'b,omitempty"`
+	}
+	_, _ = json.Marshal(quoteInName) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe JSON object name `a'b` on field `I` found"
+
+	var backslashInName struct {
+		I int `json:"a\\b"`
+	}
+	_, _ = json.Marshal(backslashInName) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe JSON object name `a.b` on field `I` found"
+
+	var doubleQuoteInName struct {
+		I int `json:"a\"b"`
+	}
+	_, _ = json.Marshal(doubleQuoteInName) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe JSON object name `a.b` on field `I` found"
+
+	var validNames struct {
+		A int `json:"a-b c.d"`
+		B int `json:"üñí"`
+		C int `json:",omitempty"`
+	}
+	_, err = json.Marshal(validNames) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
 
 	var stringOptionBool struct {
 		B bool `json:"b,string"`
@@ -232,6 +269,76 @@ func JSONv2MarshalUnsafeTypes() {
 	var uo unexportedOnly
 	_, _ = json.Marshal(uo)    // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct `jsonv2.unexportedOnly` without exported fields found"
 	_, _ = stdjson.Marshal(uo) // safe with encoding/json
+
+	// encoding/json/v2 rejects json struct tags (other than `json:"-"`) on
+	// unexported fields.
+	var taggedUnexported struct {
+		A int
+		b int `json:"b"`
+	}
+	_ = taggedUnexported.b
+	_, _ = json.Marshal(taggedUnexported)   // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag on unexported field `b` found"
+	_, err = json.Marshal(taggedUnexported) // err is checked
+	_ = err
+	_, err = stdjson.Marshal(taggedUnexported) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var taggedUnexportedEmpty struct {
+		A int
+		b int `json:""`
+	}
+	_ = taggedUnexportedEmpty.b
+	_, _ = json.Marshal(taggedUnexportedEmpty) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag on unexported field `b` found"
+
+	var taggedUnexportedOption struct {
+		A int
+		b int `json:",omitempty"`
+	}
+	_ = taggedUnexportedOption.b
+	_, _ = json.Marshal(taggedUnexportedOption) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag on unexported field `b` found"
+
+	var ignoredUnexported struct {
+		A int
+		b int `json:"-"`
+		c int `xml:"c"`
+	}
+	_, _ = ignoredUnexported.b, ignoredUnexported.c
+	_, err = json.Marshal(ignoredUnexported) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// encoding/json/v2 only rejects structs without exported fields, if no
+	// field has a json struct tag.
+	var unexportedOnlyIgnored struct {
+		a int `json:"-"`
+	}
+	_ = unexportedOnlyIgnored.a
+	_, err = json.Marshal(unexportedOnlyIgnored) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var ignoredExportedAndUnexported struct {
+		A int `json:"-"`
+		b int
+	}
+	_ = ignoredExportedAndUnexported.b
+	_, err = json.Marshal(ignoredExportedAndUnexported) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var ignoredExportedOnly struct {
+		A int `json:"-"`
+	}
+	_, err = json.Marshal(ignoredExportedOnly) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var unexportedOtherTag struct {
+		a int `xml:"a"`
+	}
+	_ = unexportedOtherTag.a
+	_, _ = json.Marshal(unexportedOtherTag) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct `struct{a int \"xml:\\\\\"a\\\\\"\"}` without exported fields found"
+
+	var nestedUnexportedOnly struct {
+		Inner unexportedOnly `json:"inner"`
+	}
+	_, _ = json.Marshal(nestedUnexportedOnly) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct `jsonv2.unexportedOnly` without exported fields found"
 
 	var mt marshalText
 	_, _ = json.Marshal(mt) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.marshalText` found"
