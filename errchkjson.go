@@ -255,7 +255,15 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 				// Fields omitted in json can be ignored
 				continue
 			}
-			if !field.Exported() {
+			isExported := field.Exported()
+			if !isExported && v2 && field.Embedded() && isStruct(field.Type()) {
+				// encoding/json/v2 encodes the exported fields of embedded
+				// structs of unexported types. Such fields are therefore
+				// checked like exported fields, but do not count as exported
+				// for the report-no-exported flag.
+				isExported = true
+			}
+			if !isExported {
 				if field.Embedded() {
 					// Embedded fields of unexported types may still forward
 					// exported fields.
@@ -303,7 +311,9 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 			if err != nil {
 				return err
 			}
-			exported++
+			if field.Exported() {
+				exported++
+			}
 		}
 		if e.reportNoExported && level == 0 && exported == 0 {
 			return newNoexportedError(fmt.Errorf("struct does not export any field"))
@@ -390,6 +400,15 @@ func isNumeric(t types.Type) bool {
 	}
 	b, ok := t.Underlying().(*types.Basic)
 	return ok && b.Info()&(types.IsInteger|types.IsFloat) > 0
+}
+
+// isStruct reports, if t is a struct or a pointer to a struct.
+func isStruct(t types.Type) bool {
+	if p, ok := t.Underlying().(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	_, ok := t.Underlying().(*types.Struct)
+	return ok
 }
 
 // isTimeDuration reports, if t is time.Duration.

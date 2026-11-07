@@ -703,10 +703,23 @@ func JSONMarshalGo127() {
 	_, err = json.Marshal(v2OnlyTags) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
 
+	// Embedded structs of unexported types are not inspected for
+	// encoding/json (known false negative, kept for backwards compatibility).
+	var v2OnlyEmbedded struct {
+		embeddedUnexportedFloat
+		B int
+	}
+	_, err = json.Marshal(v2OnlyEmbedded) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
 	var v2OnlyNoExported struct {
 		a int
 	}
 	_ = v2OnlyNoExported.a
 	_, err = json.Marshal(v2OnlyNoExported) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
+}
+
+type embeddedUnexportedFloat struct {
+	F float64
 }

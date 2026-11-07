@@ -59,6 +59,18 @@ func (_ *ptrTextKey) MarshalText() ([]byte, error) {
 	return []byte(`ptk`), nil
 }
 
+type innerString struct {
+	S string
+}
+
+type innerFloat struct {
+	F float64
+}
+
+type innerDuration struct {
+	D time.Duration
+}
+
 type structKey struct{ id int }
 
 type unexportedOnly struct {
@@ -334,6 +346,64 @@ func JSONv2MarshalUnsafeTypes() {
 	}
 	_ = unexportedOtherTag.a
 	_, _ = json.Marshal(unexportedOtherTag) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct `struct{a int \"xml:\\\\\"a\\\\\"\"}` without exported fields found"
+
+	// encoding/json/v2 encodes the exported fields of embedded structs of
+	// unexported types.
+	var embeddedSafe struct {
+		inner
+		Y int
+	}
+	_, err = json.Marshal(embeddedSafe) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var embeddedString struct {
+		innerString
+	}
+	_, _ = json.Marshal(embeddedString)   // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `string` found"
+	_, err = json.Marshal(embeddedString) // err is checked
+	_ = err
+
+	var embeddedFloatPtr struct {
+		*innerFloat
+	}
+	_, _ = json.Marshal(embeddedFloatPtr) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `float64` found"
+
+	var embeddedDuration struct {
+		innerDuration
+		B int
+	}
+	_, _ = json.Marshal(embeddedDuration) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `time.Duration` found"
+
+	var embeddedNamed struct {
+		innerString `json:"inner"`
+	}
+	_, _ = json.Marshal(embeddedNamed) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `string` found"
+
+	var embeddedUnexportedOnly struct {
+		unexportedOnly
+		B int
+	}
+	_, _ = json.Marshal(embeddedUnexportedOnly) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct `jsonv2.unexportedOnly` without exported fields found"
+
+	var embeddedNamedDup struct {
+		inner `json:"x"`
+		X     int `json:"x"`
+	}
+	_, _ = json.Marshal(embeddedNamedDup) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe duplicate JSON object name `x` in struct .* found"
+
+	var embeddedPromotedConflict struct {
+		inner
+		X int
+	}
+	_, err = json.Marshal(embeddedPromotedConflict) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var embeddedIgnored struct {
+		innerString `json:"-"`
+		B           int
+	}
+	_, err = json.Marshal(embeddedIgnored) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
 
 	var nestedUnexportedOnly struct {
 		Inner unexportedOnly `json:"inner"`
