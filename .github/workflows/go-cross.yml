@@ -51,3 +51,25 @@ jobs:
 
       - name: Build
         run: go build -ldflags "-s -w" -trimpath -o errchkjson ./cmd/errchkjson/
+
+  # TODO: this job can be removed once Go 1.28 is released and GOEXPERIMENT=jsonv2 becomes a no-op.
+  jsonv2-experiment:
+    name: Go oldstable with GOEXPERIMENT=jsonv2
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+      # Run the encoding/json/v2 tests with Go versions, where encoding/json/v2
+      # is only available as experiment (no-op for Go 1.27 and newer).
+      GOEXPERIMENT: jsonv2
+
+    steps:
+      - name: Set up Go oldstable
+        uses: actions/setup-go@v7
+        with:
+          go-version: oldstable
+
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Test
+        run: go test -v -cover ./...

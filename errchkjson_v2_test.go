@@ -1,8 +1,9 @@
-//go:build go1.27
+//go:build go1.27 || goexperiment.jsonv2
 
-// encoding/json/v2 is part of the standard library as of Go 1.27. The test
-// data for encoding/json/v2 can therefore only be type checked with Go 1.27
-// or newer.
+// encoding/json/v2 is part of the standard library as of Go 1.27 (or with
+// GOEXPERIMENT=jsonv2 for Go 1.26). The test data for
+// encoding/json/v2 can therefore only be type checked, if encoding/json/v2
+// is available.
 
 package errchkjson_test
 
@@ -28,4 +29,19 @@ func TestJSONv2OmitSafeFlag(t *testing.T) {
 
 	testdata := analysistest.TestData()
 	analysistest.Run(t, testdata, errchkjson, "jsonv2nosafe")
+}
+
+func TestJSONv2NoExportedField(t *testing.T) {
+	errchkjson := errchkjson.NewAnalyzer()
+	err := errchkjson.Flags.Set("omit-safe", "true")
+	if err != nil {
+		t.Fatalf("error setting 'omit-safe' command line flag: %v", err)
+	}
+	err = errchkjson.Flags.Set("report-no-exported", "true")
+	if err != nil {
+		t.Fatalf("error setting 'report-no-exported' command line flag: %v", err)
+	}
+
+	testdata := analysistest.TestData()
+	analysistest.Run(t, testdata, errchkjson, "jsonv2noexport")
 }

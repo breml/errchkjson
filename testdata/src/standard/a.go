@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"time"
 	"unsafe"
 )
 
@@ -715,6 +716,15 @@ func JSONMarshalGo127() {
 	// Multi-value arguments are not expanded for encoding/json.
 	_, _ = json.MarshalIndent(intAndIndent())   // want "Error return value of `encoding/json.MarshalIndent` is not checked: unsafe type `\\(int, string, string\\)` found"
 	_, err = json.MarshalIndent(intAndIndent()) // err is checked
+	_ = err
+
+	// time.Duration is encoded as integer by encoding/json.
+	var v2OnlyDuration struct {
+		D   time.Duration         `json:"d"`
+		Ptr *time.Duration        `json:"ptr"`
+		Map map[time.Duration]int `json:"map"`
+	}
+	_, err = json.Marshal(v2OnlyDuration) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
 
 	var v2OnlyNoExported struct {

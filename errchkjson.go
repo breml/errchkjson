@@ -322,7 +322,8 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 			}
 			for _, option := range options {
 				// Since Go 1.27, the `format` option is rejected by encoding/json
-				// and encoding/json/v2 unless it is supported for the given type.
+				// and encoding/json/v2 for all types, because support for it was
+				// removed (see https://go.dev/issue/79071).
 				if strings.HasPrefix(option, "format:") {
 					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
 				}
@@ -576,9 +577,10 @@ func textAppenderInterface() *types.Interface {
 }
 
 // implementsJSONMarshalerTo reports, if t implements the interface
-// encoding/json/v2.MarshalerTo. Since encoding/json/jsontext can not be imported
-// (it is only available as of Go 1.27), the method is checked by name and
-// signature.
+// encoding/json/v2.MarshalerTo. The interface can not be constructed with
+// go/types, because this requires the type object of *jsontext.Encoder of the
+// analyzed program. Therefore, the method is matched by name, signature and
+// the package path of its parameter type.
 //
 //	type MarshalerTo interface {
 //	    MarshalJSONTo(*jsontext.Encoder) error

@@ -9,6 +9,8 @@ import (
 	"io"
 	"time"
 	"unsafe"
+
+	expjsontext "github.com/go-json-experiment/json/jsontext"
 )
 
 type marshalText struct{}
@@ -79,6 +81,40 @@ type EmbeddedSlice []int
 
 type EmbeddedIface interface{ M() }
 
+type namedString string
+
+type namedInt int
+
+type namedDuration time.Duration
+
+type aliasDuration = time.Duration
+
+// The following types have a MarshalJSONTo method, which does not match the
+// encoding/json/v2.MarshalerTo interface.
+type notMarshalerToResult struct{ A int }
+
+func (_ notMarshalerToResult) MarshalJSONTo(enc *jsontext.Encoder) ([]byte, error) {
+	return nil, nil
+}
+
+type notMarshalerToByValue struct{ A int }
+
+func (_ notMarshalerToByValue) MarshalJSONTo(enc jsontext.Encoder) error {
+	return nil
+}
+
+type notMarshalerToOptions struct{ A int }
+
+func (_ notMarshalerToOptions) MarshalJSONTo(enc *jsontext.Encoder, opts json.Options) error {
+	return nil
+}
+
+type notMarshalerToExperiment struct{ A int }
+
+func (_ notMarshalerToExperiment) MarshalJSONTo(enc *expjsontext.Encoder) error {
+	return nil
+}
+
 type structKey struct{ id int }
 
 type unexportedOnly struct {
@@ -121,15 +157,15 @@ func JSONv2MarshalSafeTypes() {
 	_ = err
 
 	var safeStruct struct {
-		Bool     bool
-		Int      int    `json:"int,omitzero"`
-		IntStr   int    `json:"int_str,string"`
-		IntPtr   *int   `json:"int_ptr,string"`
-		Ints     []int  `json:"ints"`
-		Inner    inner  `json:"inner"`
-		Embedded inner  // embedded fields are not checked for duplicate names
-		Omitted  string `json:"-"`
-		ignored  string // unexported
+		Bool    bool
+		Int     int    `json:"int,omitzero"`
+		IntStr  int    `json:"int_str,string"`
+		IntPtr  *int   `json:"int_ptr,string"`
+		Ints    []int  `json:"ints"`
+		Inner   inner  `json:"inner"`
+		inner          // embedded struct, its fields are promoted
+		Omitted string `json:"-"`
+		ignored string // unexported
 	}
 	_ = safeStruct.ignored
 	_, err = json.Marshal(safeStruct) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
@@ -137,6 +173,42 @@ func JSONv2MarshalSafeTypes() {
 
 	var emptyStruct struct{}
 	_, err = json.Marshal(emptyStruct) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// encoding/json/v2 matches JSON object names case sensitive.
+	var caseDistinctNames struct {
+		A int `json:"x"`
+		B int `json:"X"`
+	}
+	_, err = json.Marshal(caseDistinctNames) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// Named types with time.Duration as underlying type do not have the
+	// methods of time.Duration and are encoded as integer.
+	var nd namedDuration
+	_, err = json.Marshal(nd) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	var mapND map[namedDuration]int
+	_, err = json.Marshal(mapND) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var stringOptionNamedInt struct {
+		N namedInt `json:",string"`
+	}
+	_, err = json.Marshal(stringOptionNamedInt) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// Methods named MarshalJSONTo, which do not match the
+	// encoding/json/v2.MarshalerTo interface, are ignored.
+	_, err = json.Marshal(notMarshalerToResult{}) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	_, err = json.Marshal(notMarshalerToByValue{}) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	_, err = json.Marshal(notMarshalerToOptions{}) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	_, err = json.Marshal(notMarshalerToExperiment{}) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+	_, err = stdjson.Marshal(notMarshalerToExperiment{}) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
 
 	var floatStr struct {
@@ -179,6 +251,40 @@ func JSONv2MarshalUnsafeTypes() {
 
 	var mapStrInt map[string]int
 	_, _ = json.Marshal(mapStrInt) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `string` as map key found"
+
+	var ns namedString
+	_, _ = json.Marshal(ns) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.namedString` found"
+
+	var strs []string
+	_, _ = json.Marshal(strs) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `string` found"
+
+	var mapNSInt map[namedString]int
+	_, _ = json.Marshal(mapNSInt) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.namedString` as map key found"
+
+	var mapIntStrs map[int][]string
+	_, _ = json.Marshal(mapIntStrs) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `string` found"
+
+	var ad aliasDuration
+	_, _ = json.Marshal(ad) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.aliasDuration` found"
+	var pad *aliasDuration
+	_, _ = json.Marshal(pad) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.aliasDuration` found"
+	var mapADInt map[aliasDuration]int
+	_, _ = json.Marshal(mapADInt) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `jsonv2.aliasDuration` as map key found"
+
+	var stringOptionString struct {
+		S string `json:",string"`
+	}
+	_, _ = json.Marshal(stringOptionString) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `string` on field `S` found"
+
+	var stringOptionStruct struct {
+		I inner `json:",string"`
+	}
+	_, _ = json.Marshal(stringOptionStruct) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `string` on field `I` found"
+
+	var stringOptionBytes struct {
+		B []byte `json:",string"`
+	}
+	_, _ = json.Marshal(stringOptionBytes) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `string` on field `B` found"
 
 	var mapF64Int map[float64]int
 	_, _ = json.Marshal(mapF64Int) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `float64` as map key found"
@@ -278,7 +384,7 @@ func JSONv2MarshalUnsafeTypes() {
 		A int `json:"x"`
 		B int `json:"x"`
 	}
-	_, _ = json.Marshal(duplicateNames) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe duplicate JSON object name `x` in struct `struct{A int \"json:\\\\\"x\\\\\"\"; B int \"json:\\\\\"x\\\\\"\"}` found"
+	_, _ = json.Marshal(duplicateNames) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe duplicate JSON object name `x` in struct .* found"
 
 	var duplicateFieldName struct {
 		X int
@@ -353,7 +459,7 @@ func JSONv2MarshalUnsafeTypes() {
 		a int `xml:"a"`
 	}
 	_ = unexportedOtherTag.a
-	_, _ = json.Marshal(unexportedOtherTag) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct `struct{a int \"xml:\\\\\"a\\\\\"\"}` without exported fields found"
+	_, _ = json.Marshal(unexportedOtherTag) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct .* without exported fields found"
 
 	// encoding/json/v2 encodes the exported fields of embedded structs of
 	// unexported types.
@@ -600,6 +706,37 @@ func encoderAndBool() (*jsontext.Encoder, bool) { return jsontext.NewEncoder(io.
 func boolAndOptions() (bool, json.Options)      { return true, json.Deterministic(true) }
 func writerBoolAndOptions() (io.Writer, bool, json.Options) {
 	return io.Discard, true, json.Deterministic(true)
+}
+
+// JSONv2MarshalErrorTargets contains test cases for the different ways the
+// returned error is handled.
+func JSONv2MarshalErrorTargets() {
+	var b bool
+	var str string
+	var buf bytes.Buffer
+	enc := jsontext.NewEncoder(io.Discard)
+
+	if err := json.MarshalWrite(&buf, str); err != nil { // err is checked
+		_ = err
+	}
+	if err := json.MarshalWrite(&buf, b); err != nil { // safe, but the io.Writer may return an error
+		_ = err
+	}
+	if _, err := json.Marshal(b); err != nil { // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+		_ = err
+	}
+	if _, err := json.Marshal(str); err != nil { // err is checked
+		_ = err
+	}
+
+	go json.MarshalWrite(&buf, str)    // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: unsafe type `string` found"
+	defer json.MarshalWrite(&buf, str) // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: unsafe type `string` found"
+
+	fmt.Print(json.MarshalEncode(enc, str)) // err is passed as argument
+
+	_ = json.MarshalEncode(enc, b, json.Deterministic(true))    // want "Error return value of `encoding/json/v2.MarshalEncode` is not checked: options passed, safety of the encoding can not be determined"
+	err := json.MarshalEncode(enc, b, json.Deterministic(true)) // err is checked
+	_ = err
 }
 
 // JSONv2MarshalMultiValueArgument contains test cases, where the arguments are
