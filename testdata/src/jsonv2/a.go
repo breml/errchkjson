@@ -930,3 +930,222 @@ func returned() ([]byte, error) {
 	var str string
 	return json.Marshal(str)
 }
+
+type unmarshalJSONBase struct{ ID int }
+
+func (_ *unmarshalJSONBase) UnmarshalJSON([]byte) error { return nil }
+
+type UnmarshalTextBase struct{ ID int }
+
+func (_ *UnmarshalTextBase) UnmarshalText([]byte) error { return nil }
+
+type UnmarshalJSONFromBase struct{ ID int }
+
+func (_ *UnmarshalJSONFromBase) UnmarshalJSONFrom(dec *jsontext.Decoder) error { return nil }
+
+type unmarshalTextKey string
+
+func (_ *unmarshalTextKey) UnmarshalText([]byte) error { return nil }
+
+type isZeroInner struct{ ID int }
+
+func (_ isZeroInner) IsZero() bool { return false }
+
+// JSONv2MarshalEmbedMethods contains test cases for embedded fields, which
+// implement methods to customize the encoding or decoding.
+func JSONv2MarshalEmbedMethods() {
+	var err error
+
+	var embeddedUnmarshalJSON struct {
+		unmarshalJSONBase
+	}
+	_, _ = json.Marshal(embeddedUnmarshalJSON)   // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `unmarshalJSONBase` found: type `jsonv2.unmarshalJSONBase` must not implement marshal or unmarshal methods"
+	_, err = json.Marshal(embeddedUnmarshalJSON) // err is checked
+	_ = err
+
+	var embeddedPtrUnmarshalText struct {
+		*UnmarshalTextBase
+	}
+	_, _ = json.Marshal(embeddedPtrUnmarshalText) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `UnmarshalTextBase` found: type `jsonv2.UnmarshalTextBase` must not implement marshal or unmarshal methods"
+
+	var embedUnmarshalJSONFrom struct {
+		F UnmarshalJSONFromBase `json:",embed"`
+	}
+	_, _ = json.Marshal(embedUnmarshalJSONFrom) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `F` found: type `jsonv2.UnmarshalJSONFromBase` must not implement marshal or unmarshal methods"
+
+	var embedMapKeyUnmarshalText struct {
+		M map[unmarshalTextKey]int `json:",embed"`
+	}
+	_, _ = json.Marshal(embedMapKeyUnmarshalText) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `M` found: map key type `jsonv2.unmarshalTextKey` must not implement marshal or unmarshal methods"
+
+	var embedValue struct {
+		inner
+		N jsontext.Value `json:",embed"`
+	}
+	_, _ = json.Marshal(embedValue) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `encoding/json/jsontext.Value` found"
+
+	// Methods of unexported types can not be called by encoding/json/v2.
+	var unexportedNamedUnmarshalJSON struct {
+		unmarshalJSONBase `json:"base"`
+	}
+	_, _ = json.Marshal(unexportedNamedUnmarshalJSON) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe field `unmarshalJSONBase` of unexported type with methods for JSON encoding found"
+
+	var unexportedNamedIsZeroOmitzero struct {
+		isZeroInner `json:"in,omitzero"`
+	}
+	_, _ = json.Marshal(unexportedNamedIsZeroOmitzero) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe field `isZeroInner` of unexported type with methods for JSON encoding found"
+
+	var unexportedNamedIsZero struct {
+		isZeroInner `json:"in"`
+	}
+	_, err = json.Marshal(unexportedNamedIsZero) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var exportedNamedUnmarshalText struct {
+		UnmarshalTextBase `json:"base"`
+	}
+	_, err = json.Marshal(exportedNamedUnmarshalText) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var fieldUnmarshalJSON struct {
+		F unmarshalJSONBase
+	}
+	_, err = json.Marshal(fieldUnmarshalJSON) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+}
+
+// JSONv2MarshalGo126Options contains test cases for the json struct tag
+// options `inline` and `unknown`, which are only known by encoding/json/v2 of
+// Go 1.26 (GOEXPERIMENT=jsonv2).
+func JSONv2MarshalGo126Options() {
+	var err error
+
+	var inlineInt struct {
+		X int `json:",inline"`
+	}
+	_, _ = json.Marshal(inlineInt) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `X` found: type `int` must be a struct, a map with string key or jsontext.Value"
+
+	var unknownStruct struct {
+		X inner `json:",unknown"`
+	}
+	_, _ = json.Marshal(unknownStruct) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `X` found: type `jsonv2.inner` must be a map with string key or jsontext.Value for option `unknown`"
+
+	var inlineUnknown struct {
+		X map[string]int `json:",inline,unknown"`
+	}
+	_, _ = json.Marshal(inlineUnknown) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `X` found: options `inline` and `unknown` can not be combined"
+
+	var inlineNamed struct {
+		X inner `json:"x,inline"`
+	}
+	_, _ = json.Marshal(inlineNamed) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe embedded field `X` found: JSON object name `x` is not allowed"
+
+	var inlineMisspelled struct {
+		X int `json:",Inline"`
+	}
+	_, _ = json.Marshal(inlineMisspelled) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `Inline` on field `X` found: invalid spelling of `inline`"
+
+	var inlineStruct struct {
+		X inner `json:",inline"`
+	}
+	_, err = json.Marshal(inlineStruct) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var unknownValue struct {
+		X jsontext.Value `json:",unknown"`
+	}
+	_, _ = json.Marshal(unknownValue) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `encoding/json/jsontext.Value` found"
+
+	var embedInline struct {
+		X inner `json:",embed,inline"`
+	}
+	_, err = json.Marshal(embedInline) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+}
+
+type byteArrayKey [2]byte
+
+type namedByte byte
+
+type recursiveMapV2 map[int]recursiveMapV2
+
+type recursiveSliceV2 []recursiveSliceV2
+
+// JSONv2MarshalMiscellaneous contains further test cases for encoding/json/v2.
+func JSONv2MarshalMiscellaneous() {
+	var err error
+
+	// Unknown options are ignored, unless they appear more than once.
+	var duplicateUnknownOption struct {
+		A int `json:"a,foo,foo"`
+	}
+	_, _ = json.Marshal(duplicateUnknownOption) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct tag option `foo` on field `A` found: duplicate option"
+
+	var invalidUTF8Name struct {
+		A int "json:\"\\xff\""
+	}
+	_, _ = json.Marshal(invalidUTF8Name)      // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe JSON object name with invalid UTF-8 on field `A` found"
+	_, err = stdjson.Marshal(invalidUTF8Name) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// Arrays of bytes are encoded as base64 encoded string.
+	var mapByteArrayKey map[[2]byte]int
+	_, err = json.Marshal(mapByteArrayKey) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var mapNamedByteArrayKey map[byteArrayKey]int
+	_, err = json.Marshal(mapNamedByteArrayKey) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var mapPtrByteArrayKey map[*[2]byte]int
+	_, _ = json.Marshal(mapPtrByteArrayKey) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `\\*\\[2\\]byte` as map key found"
+
+	var mapNamedByteElemKey map[[2]namedByte]int
+	_, err = json.Marshal(mapNamedByteElemKey) // want "`encoding/json/v2.Marshal` for unsupported type `\\[2\\]jsonv2.namedByte` as map key found"
+	_ = err
+
+	var mapIntArrayKey map[[2]int]int
+	_, err = json.Marshal(mapIntArrayKey) // want "`encoding/json/v2.Marshal` for unsupported type `\\[2\\]int` as map key found"
+	_ = err
+
+	_, err = stdjson.Marshal(mapByteArrayKey) // want "`encoding/json.Marshal` for unsupported type `\\[2\\]byte` as map key found"
+	_ = err
+
+	// Recursive types.
+	var recursiveMap recursiveMapV2
+	_, err = json.Marshal(recursiveMap) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var recursiveSlice recursiveSliceV2
+	_, err = json.Marshal(recursiveSlice) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+}
+
+// JSONv2MarshalAssignments contains test cases for multi-value assignments
+// and var declarations.
+func JSONv2MarshalAssignments() {
+	var b bool
+	var str string
+	var buf bytes.Buffer
+
+	n, err := 0, json.MarshalWrite(&buf, str) // err is checked
+	_, _ = n, err
+
+	_, _ = 0, json.MarshalWrite(&buf, str) // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: unsafe type `string` found"
+
+	errA, _ := json.MarshalWrite(&buf, b), json.MarshalWrite(&buf, str) // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: unsafe type `string` found"
+	_ = errA
+
+	var errVar = json.MarshalWrite(&buf, str) // err is checked
+	_ = errVar
+
+	var _ = json.MarshalWrite(&buf, str) // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: unsafe type `string` found"
+
+	var _, errSafe = json.Marshal(b) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = errSafe
+
+	var data, errUnsafe = json.Marshal(str) // err is checked
+	_, _ = data, errUnsafe
+
+	var _, _ = json.Marshal(str) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `string` found"
+}

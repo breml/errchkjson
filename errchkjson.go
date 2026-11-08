@@ -44,56 +44,98 @@ func NewAnalyzer() *analysis.Analyzer {
 func (e *errchkjson) run(pass *analysis.Pass) (interface{}, error) {
 	for _, file := range pass.Files {
 		ast.Inspect(file, func(n ast.Node) bool {
-			if n == nil {
-				return true
-			}
-
-			// if the error is returned, it is the caller's responsibility to check
-			// the return value.
-			if _, ok := n.(*ast.ReturnStmt); ok {
-				return false
-			}
-
-			ce, ok := n.(*ast.CallExpr)
-			if ok {
-				fn, _ := typeutil.Callee(pass.TypesInfo, ce).(*types.Func)
-				if fn == nil {
-					return true
-				}
-
-				if jf, ok := jsonFuncs[fn.FullName()]; ok {
-					e.handleJSONMarshal(pass, ce, fn.FullName(), jf, blankIdentifier)
-				} else {
-					e.inspectArgs(pass, ce.Args)
-				}
-				return false
-			}
-
-			as, ok := n.(*ast.AssignStmt)
-			if !ok {
-				return true
-			}
-
-			ce, ok = as.Rhs[0].(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-
-			fn, _ := typeutil.Callee(pass.TypesInfo, ce).(*types.Func)
-			if fn == nil {
-				return true
-			}
-
-			jf, ok := jsonFuncs[fn.FullName()]
-			if !ok || len(as.Lhs) <= jf.errIdx {
-				return true
-			}
-			e.handleJSONMarshal(pass, ce, fn.FullName(), jf, evaluateMarshalErrorTarget(as.Lhs[jf.errIdx]))
-			return false
+			return e.inspect(pass, n)
 		})
 	}
 
 	return nil, nil
+}
+
+func (e *errchkjson) inspect(pass *analysis.Pass, n ast.Node) bool {
+	switch n := n.(type) {
+	case *ast.ReturnStmt:
+		// if the error is returned, it is the caller's responsibility to check
+		// the return value.
+		return false
+
+	case *ast.CallExpr:
+		fn, _ := typeutil.Callee(pass.TypesInfo, n).(*types.Func)
+		if fn == nil {
+			return true
+		}
+
+		if jf, ok := jsonFuncs[fn.FullName()]; ok {
+			e.handleJSONMarshal(pass, n, fn.FullName(), jf, blankIdentifier)
+		} else {
+			e.inspectArgs(pass, n.Args)
+		}
+		return false
+
+	case *ast.AssignStmt:
+		return e.inspectAssignment(pass, n.Lhs, n.Rhs, false)
+
+	case *ast.ValueSpec:
+		lhs := make([]ast.Expr, 0, len(n.Names))
+		for _, name := range n.Names {
+			lhs = append(lhs, name)
+		}
+		return e.inspectAssignment(pass, lhs, n.Values, true)
+	}
+
+	return true
+}
+
+// inspectAssignment handles the assignment of the values rhs to lhs, either
+// by an assignment statement or by a var declaration (valueSpec is true). It
+// returns false, if the children of the assignment must not be inspected.
+func (e *errchkjson) inspectAssignment(pass *analysis.Pass, lhs []ast.Expr, rhs []ast.Expr, valueSpec bool) bool {
+	if len(rhs) == 1 {
+		ce, fnName, jf, ok := jsonFuncCall(pass, rhs[0])
+		if !ok || len(lhs) <= jf.errIdx {
+			return true
+		}
+		// For backwards compatibility, var declarations are not handled for
+		// encoding/json.Marshal and encoding/json.MarshalIndent, because this
+		// would add new findings (error checked but argument is safe).
+		if valueSpec && !jf.v2 && !jf.alwaysOmitSafe {
+			return true
+		}
+		e.handleJSONMarshal(pass, ce, fnName, jf, evaluateMarshalErrorTarget(lhs[jf.errIdx]))
+		return false
+	}
+
+	if len(lhs) != len(rhs) {
+		return true
+	}
+
+	// Multi-value assignment (e.g. `n, err := 0, json.MarshalWrite(w, v)`),
+	// only functions returning a single value (the error) are possible.
+	for i, expr := range rhs {
+		ce, fnName, jf, ok := jsonFuncCall(pass, expr)
+		if ok && jf.errIdx == 0 {
+			e.handleJSONMarshal(pass, ce, fnName, jf, evaluateMarshalErrorTarget(lhs[i]))
+			continue
+		}
+		ast.Inspect(expr, func(n ast.Node) bool {
+			return e.inspect(pass, n)
+		})
+	}
+	return false
+}
+
+// jsonFuncCall reports, if expr is a call of one of the JSON encoding
+// functions checked by errchkjson.
+func jsonFuncCall(pass *analysis.Pass, expr ast.Expr) (*ast.CallExpr, string, jsonFunc, bool) {
+	ce, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return nil, "", jsonFunc{}, false
+	}
+	fn, _ := typeutil.Callee(pass.TypesInfo, ce).(*types.Func)
+	if fn == nil {
+		return nil, "", jsonFunc{}, false
+	}
+	jf, ok := jsonFuncs[fn.FullName()]
+	return ce, fn.FullName(), jf, ok
 }
 
 func evaluateMarshalErrorTarget(n ast.Expr) marshalErrorTarget {
@@ -219,6 +261,12 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 	if _, ok := seenTypes[t]; ok {
 		return nil
 	}
+	// Named types may be recursive without a struct being involved (e.g.
+	// `type Tree map[string]Tree`), mark them as seen to prevent an infinite
+	// recursion.
+	if _, ok := types.Unalias(t).(*types.Named); ok {
+		seenTypes[t] = struct{}{}
+	}
 
 	if implementsMarshaler(t, v2) {
 		return fmt.Errorf("unsafe type `%s` found", t.String())
@@ -318,16 +366,27 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 			if v2 && strings.ContainsAny(name, "\\'\"`") {
 				return fmt.Errorf("unsafe JSON object name `%s` on field `%s` found", name, field.Name())
 			}
+			if v2 && !utf8.ValidString(name) {
+				return fmt.Errorf("unsafe JSON object name with invalid UTF-8 on field `%s` found", field.Name())
+			}
 			// encoding/json/v2 rejects embedded fields of non-struct types
 			// (e.g. named basic types, slices or interfaces) without a JSON name.
 			if v2 && field.Embedded() && name == "" && !isStruct(field.Type()) {
 				return fmt.Errorf("unsafe embedded field `%s` of non-struct type without JSON name found", field.Name())
 			}
+			// Embedded struct without JSON name.
+			implicitEmbed := field.Embedded() && name == "" && isStruct(field.Type())
 			for _, option := range options {
 				// Since Go 1.27, the `format` option is rejected by encoding/json
 				// and encoding/json/v2 for all types, because support for it was
-				// removed (see https://go.dev/issue/79071).
-				if strings.HasPrefix(option, "format:") {
+				// removed (see https://go.dev/issue/79071). encoding/json/v2
+				// rejects any `format` option, encoding/json only a `format`
+				// option with a valid value on fields other than embedded
+				// structs without JSON name.
+				if v2 && strings.HasPrefix(option, "format:") {
+					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
+				}
+				if !v2 && isFormatOptionWithValue(option) && !implicitEmbed {
 					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
 				}
 				// encoding/json/v2 rejects the `string` option on non-numeric types.
@@ -343,11 +402,26 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 				if err != nil {
 					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found: %v", option, field.Name(), err)
 				}
-				embed = seenOptions["embed"] || (field.Embedded() && name == "")
-				if embed {
-					err = checkJSONEmbedV2(field.Type(), name, seenOptions)
+				// Fields with the `inline` or `unknown` options are embedded
+				// by encoding/json/v2 of Go 1.26 (GOEXPERIMENT=jsonv2), but
+				// are regular fields as of Go 1.27.
+				embed = seenOptions["embed"] || implicitEmbed
+				switch {
+				case embed || seenOptions["inline"] || seenOptions["unknown"]:
+					err := checkJSONEmbedV2(field.Type(), name, seenOptions)
 					if err != nil {
 						return fmt.Errorf("unsafe embedded field `%s` found: %v", field.Name(), err)
+					}
+				case !field.Exported():
+					// Embedded struct of an unexported type with a JSON name,
+					// encoded as regular field. Methods of the unexported type
+					// can not be called.
+					ft := field.Type()
+					if p, ok := ft.Underlying().(*types.Pointer); ok {
+						ft = p.Elem()
+					}
+					if implementsJSONMethods(ft) || (seenOptions["omitzero"] && implementsIsZero(ft)) {
+						return fmt.Errorf("unsafe field `%s` of unexported type with methods for JSON encoding found", field.Name())
 					}
 				}
 			}
@@ -430,6 +504,12 @@ func jsonSafeMapKey(t types.Type, v2 bool) error {
 		return newUnsupportedError(fmt.Errorf("unsupported type `%s` as map key found", t.String()))
 	case *types.Interface:
 		return fmt.Errorf("unsafe type `%s` as map key found", t.String())
+	case *types.Array:
+		// encoding/json/v2 encodes arrays of bytes as base64 encoded string.
+		if v2 && isByte(ut.Elem()) {
+			return nil
+		}
+		return newUnsupportedError(fmt.Errorf("unsupported type `%s` as map key found", t.String()))
 	case *types.Pointer:
 		if !v2 {
 			return newUnsupportedError(fmt.Errorf("unsupported type `%s` as map key found", t.String()))
@@ -448,12 +528,15 @@ func jsonSafeMapKey(t types.Type, v2 bool) error {
 }
 
 // jsonTagOptionsV2 are the json struct tag options known by encoding/json/v2.
-var jsonTagOptionsV2 = []string{"case", "embed", "omitzero", "omitempty", "string", "format"}
+// The options `inline` and `unknown` are only known by encoding/json/v2 of
+// Go 1.26 (GOEXPERIMENT=jsonv2), they have been replaced by `embed` in Go 1.27.
+var jsonTagOptionsV2 = []string{"case", "embed", "inline", "unknown", "omitzero", "omitempty", "string", "format"}
 
 // checkJSONTagOptionsV2 checks the json struct tag options (as returned by
 // parseJSONTag) according to the rules of encoding/json/v2. It returns the
-// set of known options. If encoding/json/v2 rejects an option, the raw option
-// and an error are returned. Unknown options are ignored by encoding/json/v2.
+// set of options. If encoding/json/v2 rejects an option, the raw option
+// and an error are returned. Unknown options are ignored by encoding/json/v2,
+// unless they appear more than once.
 func checkJSONTagOptionsV2(options []string) (map[string]bool, string, error) {
 	seen := map[string]bool{}
 	for _, option := range options {
@@ -491,22 +574,28 @@ func checkJSONTagOptionsV2(options []string) (map[string]bool, string, error) {
 		if seen[ident] {
 			return nil, option, fmt.Errorf("duplicate option")
 		}
-		if slices.Contains(jsonTagOptionsV2, ident) {
-			seen[ident] = true
-		}
+		seen[ident] = true
 	}
 	return seen, "", nil
 }
 
 // checkJSONEmbedV2 checks a field, which is embedded by encoding/json/v2
-// (embedded struct without JSON name or field with the `embed` option),
-// according to the rules of encoding/json/v2.
+// (embedded struct without JSON name or field with the `embed` option, or the
+// `inline` or `unknown` options for Go 1.26), according to the rules of
+// encoding/json/v2.
 func checkJSONEmbedV2(t types.Type, name string, options map[string]bool) error {
 	if name != "" {
 		return fmt.Errorf("JSON object name `%s` is not allowed", name)
 	}
+	if options["inline"] && options["unknown"] {
+		return fmt.Errorf("options `inline` and `unknown` can not be combined")
+	}
 	for _, option := range jsonTagOptionsV2 {
-		if option != "embed" && options[option] {
+		switch option {
+		case "embed", "inline", "unknown":
+			continue
+		}
+		if options[option] {
 			return fmt.Errorf("option `%s` is not allowed, only `embed` is supported", option)
 		}
 	}
@@ -518,11 +607,22 @@ func checkJSONEmbedV2(t types.Type, name string, options map[string]bool) error 
 	if isJSONTextValue(t) {
 		return nil
 	}
+	// The fields to embed can not be determined, if the type customizes its
+	// encoding or decoding.
+	if implementsJSONMethods(t) {
+		return fmt.Errorf("type `%s` must not implement marshal or unmarshal methods", t.String())
+	}
 	switch ut := t.Underlying().(type) {
 	case *types.Struct:
+		if options["unknown"] {
+			return fmt.Errorf("type `%s` must be a map with string key or jsontext.Value for option `unknown`", t.String())
+		}
 		return nil
 	case *types.Map:
 		if b, ok := ut.Key().Underlying().(*types.Basic); ok && b.Info()&types.IsString > 0 {
+			if implementsJSONMethods(ut.Key()) {
+				return fmt.Errorf("map key type `%s` must not implement marshal or unmarshal methods", ut.Key().String())
+			}
 			return nil
 		}
 	}
@@ -537,6 +637,26 @@ func isJSONTextValue(t types.Type) bool {
 	}
 	obj := n.Obj()
 	return obj.Pkg() != nil && obj.Pkg().Path() == "encoding/json/jsontext" && obj.Name() == "Value"
+}
+
+// isFormatOptionWithValue reports, if option is a `format` option with a value,
+// which is accepted by the parser of the json struct tag (a Go identifier or a
+// non-empty single-quoted string). Since Go 1.27, encoding/json rejects such
+// options. Without a valid value, the option is ignored by encoding/json.
+func isFormatOptionWithValue(option string) bool {
+	value, ok := strings.CutPrefix(option, "format:")
+	if !ok {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(value)
+	return r == '_' || unicode.IsLetter(r) || (r == '\'' && value != "''")
+}
+
+// isByte reports, if t is the predeclared type byte (uint8). Named byte types
+// are not considered.
+func isByte(t types.Type) bool {
+	b, ok := types.Unalias(t).(*types.Basic)
+	return ok && b.Kind() == types.Uint8
 }
 
 // isLetterOrDigit reports, if r is allowed in a json struct tag option.
@@ -613,6 +733,34 @@ func implementsMarshalerMethodSet(t types.Type) bool {
 		types.Implements(t, jsonMarshalerInterface()) ||
 		types.Implements(t, textAppenderInterface()) ||
 		implementsJSONMarshalerTo(t)
+}
+
+// implementsJSONMethods reports, if t or *t implements one of the interfaces,
+// which allow a type to customize its JSON encoding or decoding.
+func implementsJSONMethods(t types.Type) bool {
+	return implementsMarshalerMethodSet(t) || implementsUnmarshalerMethodSet(t) ||
+		implementsMarshalerMethodSet(types.NewPointer(t)) || implementsUnmarshalerMethodSet(types.NewPointer(t))
+}
+
+// implementsUnmarshalerMethodSet reports, if the method set of t contains one
+// of the methods, which allow a type to customize its JSON decoding.
+func implementsUnmarshalerMethodSet(t types.Type) bool {
+	return types.Implements(t, unmarshalerInterface("UnmarshalText")) ||
+		types.Implements(t, unmarshalerInterface("UnmarshalJSON")) ||
+		implementsJSONTextMethod(t, "UnmarshalJSONFrom", "Decoder")
+}
+
+// implementsIsZero reports, if t or *t implements the method IsZero() bool,
+// which is used by encoding/json/v2 for the `omitzero` option.
+func implementsIsZero(t types.Type) bool {
+	isZeroer := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "IsZero", types.NewSignatureType(
+			nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Typ[types.Bool])),
+			false)),
+	}, nil)
+	isZeroer.Complete()
+	return types.Implements(t, isZeroer) || types.Implements(types.NewPointer(t), isZeroer)
 }
 
 func (e *errchkjson) inspectArgs(pass *analysis.Pass, args []ast.Expr) {
@@ -703,6 +851,29 @@ func textAppenderInterface() *types.Interface {
 	return textAppenderInterface
 }
 
+// Construct *types.Interface for the interfaces encoding.TextUnmarshaler and
+// json.Unmarshaler
+//
+//	type TextUnmarshaler interface {
+//	    UnmarshalText(text []byte) error
+//	}
+//
+//	type Unmarshaler interface {
+//	    UnmarshalJSON([]byte) error
+//	}
+func unmarshalerInterface(method string) *types.Interface {
+	unmarshalerInterface := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, method, types.NewSignatureType(
+			nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.NewSlice(types.Universe.Lookup("byte").Type()))),
+			types.NewTuple(types.NewVar(token.NoPos, nil, "", types.Universe.Lookup("error").Type())),
+			false)),
+	}, nil)
+	unmarshalerInterface.Complete()
+
+	return unmarshalerInterface
+}
+
 // implementsJSONMarshalerTo reports, if t implements the interface
 // encoding/json/v2.MarshalerTo. The interface can not be constructed with
 // go/types, because this requires the type object of *jsontext.Encoder of the
@@ -713,7 +884,15 @@ func textAppenderInterface() *types.Interface {
 //	    MarshalJSONTo(*jsontext.Encoder) error
 //	}
 func implementsJSONMarshalerTo(t types.Type) bool {
-	obj, _, _ := types.LookupFieldOrMethod(t, false, nil, "MarshalJSONTo")
+	return implementsJSONTextMethod(t, "MarshalJSONTo", "Encoder")
+}
+
+// implementsJSONTextMethod reports, if the method set of t contains the method
+// with the signature `method(*jsontext.<typeName>) error` (e.g.
+// `MarshalJSONTo(*jsontext.Encoder) error` or
+// `UnmarshalJSONFrom(*jsontext.Decoder) error`).
+func implementsJSONTextMethod(t types.Type, method string, typeName string) bool {
+	obj, _, _ := types.LookupFieldOrMethod(t, false, nil, method)
 	fn, ok := obj.(*types.Func)
 	if !ok {
 		return false
@@ -734,5 +913,5 @@ func implementsJSONMarshalerTo(t types.Type) bool {
 		return false
 	}
 	obj2 := named.Obj()
-	return obj2.Pkg() != nil && obj2.Pkg().Path() == "encoding/json/jsontext" && obj2.Name() == "Encoder"
+	return obj2.Pkg() != nil && obj2.Pkg().Path() == "encoding/json/jsontext" && obj2.Name() == typeName
 }

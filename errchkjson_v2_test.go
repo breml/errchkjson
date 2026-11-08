@@ -1,9 +1,9 @@
-//go:build go1.27 || goexperiment.jsonv2
+//go:build goexperiment.jsonv2
 
-// encoding/json/v2 is part of the standard library as of Go 1.27 (or with
-// GOEXPERIMENT=jsonv2 for Go 1.26). The test data for
-// encoding/json/v2 can therefore only be type checked, if encoding/json/v2
-// is available.
+// encoding/json/v2 is only available with GOEXPERIMENT=jsonv2. The experiment
+// is enabled by default as of Go 1.27, but can still be disabled with
+// GOEXPERIMENT=nojsonv2. The test data for encoding/json/v2 can therefore only
+// be type checked, if the experiment is enabled.
 
 package errchkjson_test
 

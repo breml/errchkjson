@@ -756,3 +756,85 @@ type embeddedUnexportedFloat struct {
 }
 
 func intAndIndent() (int, string, string) { return 0, "", "  " }
+
+type EmbeddedFormat struct {
+	I int
+}
+
+// JSONMarshalFormatOption contains test cases for the `format` option, which
+// is rejected by encoding/json as of Go 1.27.
+func JSONMarshalFormatOption() {
+	var err error
+
+	// encoding/json ignores `format` options without a valid value and on
+	// embedded structs without JSON name.
+	var formatTagIgnored struct {
+		A              int `json:"a,format:"`
+		B              int `json:"b,format:123"`
+		C              int `json:"c,format:''"`
+		EmbeddedFormat `json:",format:x"`
+	}
+	_, err = json.Marshal(formatTagIgnored) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var formatTagQuoted struct {
+		A int `json:"a,format:'2006-01-02'"`
+	}
+	_, _ = json.Marshal(formatTagQuoted) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe struct tag option `format:'2006-01-02'` on field `A` found"
+
+	var formatTagEmbeddedNamed struct {
+		EmbeddedFormat `json:"e,format:x"`
+	}
+	_, _ = json.Marshal(formatTagEmbeddedNamed) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe struct tag option `format:x` on field `EmbeddedFormat` found"
+
+	// The `embed` option is not known by encoding/json of Go 1.26 with
+	// GOEXPERIMENT=jsonv2, the field is therefore a regular field.
+	var formatTagEmbedOption struct {
+		X EmbeddedFormat `json:",embed,format:x"`
+	}
+	_, _ = json.Marshal(formatTagEmbedOption) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe struct tag option `format:x` on field `X` found"
+}
+
+type recursiveMap map[int]recursiveMap
+
+type recursiveSlice []recursiveSlice
+
+type recursivePtr *recursivePtr
+
+// JSONMarshalRecursiveTypes contains test cases for recursive types, which
+// are not structs.
+func JSONMarshalRecursiveTypes() {
+	var err error
+
+	var m recursiveMap
+	_, err = json.Marshal(m) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var s recursiveSlice
+	_, err = json.Marshal(s) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var p recursivePtr
+	_, err = json.Marshal(p) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+}
+
+// JSONMarshalAssignments contains test cases for multi-value assignments and
+// var declarations.
+func JSONMarshalAssignments() {
+	var f float64
+	enc := json.NewEncoder(ioutil.Discard)
+
+	n, err := 0, enc.Encode(f) // err is checked
+	_, _ = n, err
+
+	_, _ = 0, enc.Encode(f) // want "Error return value of `\\(\\*encoding/json.Encoder\\).Encode` is not checked: unsafe type `float64` found"
+
+	var errVar = enc.Encode(f) // err is checked
+	_ = errVar
+
+	// For backwards compatibility, var declarations are not handled for
+	// encoding/json.Marshal (known false positive).
+	var _, errMarshal = json.Marshal(f) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	_ = errMarshal
+}
