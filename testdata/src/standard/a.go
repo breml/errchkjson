@@ -838,3 +838,66 @@ func JSONMarshalAssignments() {
 	var _, errMarshal = json.Marshal(f) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
 	_ = errMarshal
 }
+
+type embeddedUnexportedFormat struct {
+	I int
+}
+
+type embeddedUnexportedFormatMethod struct {
+	I int
+}
+
+func (_ *embeddedUnexportedFormatMethod) UnmarshalJSON(_ []byte) error {
+	return nil
+}
+
+// JSONMarshalFormatOptionParsing contains test cases for the parsing of the
+// value of the `format` option and the `format` option on embedded structs of
+// unexported types.
+func JSONMarshalFormatOptionParsing() {
+	var err error
+
+	// A single-quoted value, which is not terminated, is ignored.
+	var formatTagNotTerminated struct {
+		A int `json:"a,format:'abc"`
+	}
+	_, err = json.Marshal(formatTagNotTerminated) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// A single-quoted value may contain commas.
+	var formatTagQuotedComma struct {
+		A int `json:"a,format:'a,b'"`
+	}
+	_, _ = json.Marshal(formatTagQuotedComma) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe struct tag option `format:'a,b'` on field `A` found"
+
+	// A malformed value is ignored, but a later valid one is not.
+	var formatTagSecond struct {
+		A int `json:"a,format:'abc,format:x"`
+	}
+	_, _ = json.Marshal(formatTagSecond) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe struct tag option `format:x` on field `A` found"
+
+	// Embedded structs of unexported types with a JSON name.
+	var formatTagEmbeddedUnexported struct {
+		embeddedUnexportedFormat `json:"e,format:x"`
+	}
+	_, _ = json.Marshal(formatTagEmbeddedUnexported) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe struct tag option `format:x` on field `embeddedUnexportedFormat` found"
+
+	var formatTagEmbeddedUnexportedPtr struct {
+		*embeddedUnexportedFormat `json:"e,format:x"`
+	}
+	_, _ = json.Marshal(formatTagEmbeddedUnexportedPtr) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe struct tag option `format:x` on field `embeddedUnexportedFormat` found"
+
+	// Embedded structs of unexported types without JSON name or with methods
+	// are not affected.
+	var formatTagEmbeddedUnexportedIgnored struct {
+		embeddedUnexportedFormat `json:",format:x"`
+	}
+	_, err = json.Marshal(formatTagEmbeddedUnexportedIgnored) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var formatTagEmbeddedUnexportedMethod struct {
+		embeddedUnexportedFormatMethod `json:"e,format:x"`
+	}
+	_, err = json.Marshal(formatTagEmbeddedUnexportedMethod) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+}

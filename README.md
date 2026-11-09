@@ -141,16 +141,25 @@ types are the same as above, with the following differences:
 * `time.Duration` is unsafe, because it has no default representation in `encoding/json/v2`.
 * Types, which implement one of the marshaler interfaces with a pointer receiver (e.g. `func (*T) MarshalJSON() ([]byte, error)`),
   are unsafe, even if they are passed by value, because `encoding/json/v2` always calls these methods.
-* Float map keys (e.g. `map[float64]string`) and pointer map keys (e.g. `map[*int]string`) are unsafe
-  instead of forbidden.
+* Map keys of types, which are not safe (e.g. `map[float64]string`, `map[*int]string` or `map[bool]string`),
+  are unsafe instead of forbidden, because `encoding/json/v2` encodes nil and empty maps without error.
 * Map keys of byte array types (e.g. `map[[16]byte]string`) are safe instead of forbidden, because they
   are encoded as base64 encoded strings.
+* Forbidden types are only forbidden, if they are always encoded. Forbidden types as elements of slices or maps,
+  behind pointers (e.g. a struct field of type `*chan int`) or in struct fields with the `omitzero` option are
+  unsafe, because nil and empty values are encoded without error. Arrays of length 0 (e.g. `[0]func()`) are safe.
+* A forbidden type is reported, even if the struct also contains unsafe fields (e.g. `string`), independent
+  of the order of the fields.
 * Struct fields with the `string` option in the `json` struct tag are unsafe, if the type of the field is
   not numeric.
-* Structs with two or more direct fields using the same JSON object name are unsafe. Conflicts with
+* Structs with two or more direct fields using the same JSON object name are unsafe. This includes fields
+  with the `embed` option, which are regular fields for `encoding/json/v2` of Go 1.26 (e.g. a field
+  ``F T `json:",embed"` `` conflicts with a field using the JSON name `F`). Conflicts with
   fields promoted from embedded structs are not an error, because `encoding/json/v2` resolves them
   using the Go embedding rules (the less nested field wins, ambiguous fields are ignored).
 * Structs with fields, but without any exported field and without any `json` struct tag, are unsafe.
+* Struct fields with the JSON object name `-` and options (e.g. `json:"-,omitempty"`) are unsafe, because
+  they are rejected by `encoding/json/v2` of Go 1.26.
 * Struct fields with a JSON object name containing a backslash or quote characters (e.g. `json:"'name'"`)
   or invalid UTF-8 are unsafe.
 * Unexported struct fields with a `json` struct tag other than `json:"-"` are unsafe.
@@ -170,7 +179,8 @@ types are the same as above, with the following differences:
   type implements one of the marshaler or unmarshaler interfaces, or the `IsZero() bool` method in
   combination with the `omitzero` option, because these methods can not be called.
 * If options are passed to the function (e.g. `json.WithMarshalers`), the encoding of any type can
-  be changed and the call is therefore always considered unsafe.
+  be changed and the call is therefore always considered unsafe. For `MarshalEncode`, the options of the
+  `jsontext.Encoder` apply as well, types are therefore never considered forbidden.
 
 Because `MarshalWrite` and `MarshalEncode` may return errors unrelated to the encoded type (e.g. from the
 `io.Writer`), their returned error is never reported as safe to omit, similar to `(*encoding/json.Encoder).Encode`.

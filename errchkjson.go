@@ -3,6 +3,7 @@
 package errchkjson
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -10,6 +11,7 @@ import (
 	"go/types"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -161,6 +163,7 @@ type jsonFunc struct {
 	errIdx         int  // index of the error in the returned values.
 	alwaysOmitSafe bool // the function may return errors not related to the encoded type (e.g. from an io.Writer).
 	v2             bool // the function is part of encoding/json/v2.
+	encoderOpts    bool // the encoding is affected by the options of the passed jsontext.Encoder.
 }
 
 var jsonFuncs = map[string]jsonFunc{
@@ -169,7 +172,7 @@ var jsonFuncs = map[string]jsonFunc{
 	"(*encoding/json.Encoder).Encode": {argIdx: 0, errIdx: 0, alwaysOmitSafe: true},
 	"encoding/json/v2.Marshal":        {argIdx: 0, errIdx: 1, v2: true},
 	"encoding/json/v2.MarshalWrite":   {argIdx: 1, errIdx: 0, alwaysOmitSafe: true, v2: true},
-	"encoding/json/v2.MarshalEncode":  {argIdx: 1, errIdx: 0, alwaysOmitSafe: true, v2: true},
+	"encoding/json/v2.MarshalEncode":  {argIdx: 1, errIdx: 0, alwaysOmitSafe: true, v2: true, encoderOpts: true},
 }
 
 func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fnName string, jf jsonFunc, errorTarget marshalErrorTarget) {
@@ -200,6 +203,12 @@ func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fn
 		}
 
 		err = e.jsonSafe(t, 0, map[types.Type]struct{}{}, jf.v2)
+		if jf.encoderOpts {
+			// The options of the encoder (e.g. json.WithMarshalers passed to
+			// jsontext.NewEncoder) can change the encoding of any type,
+			// therefore a type is never considered unsupported.
+			err = demoteUnsupported(err)
+		}
 	}
 
 	if err != nil {
@@ -305,6 +314,11 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 		}
 
 	case *types.Array:
+		if v2 && ut.Len() == 0 {
+			// encoding/json/v2 encodes arrays of length 0 without
+			// considering the element type.
+			return nil
+		}
 		err := e.jsonSafe(ut.Elem(), level+1, seenTypes, v2)
 		if err != nil {
 			return err
@@ -313,6 +327,11 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 
 	case *types.Slice:
 		err := e.jsonSafe(ut.Elem(), level+1, seenTypes, v2)
+		if v2 {
+			// encoding/json/v2 encodes nil and empty slices without
+			// considering the element type.
+			err = demoteUnsupported(err)
+		}
 		if err != nil {
 			return err
 		}
@@ -320,144 +339,42 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 
 	case *types.Struct:
 		seenTypes[t] = struct{}{}
-		exported := 0
-		hasAnyJSONTag := false   // any field has a json struct tag (including `json:"-"`).
-		hasAnyJSONField := false // any field is considered for encoding.
-		names := map[string]struct{}{}
+		s := structState{names: map[string]struct{}{}}
+		var firstErr error
 		for i := 0; i < ut.NumFields(); i++ {
-			field := ut.Field(i)
-			tag, hasTag := reflect.StructTag(ut.Tag(i)).Lookup("json")
-			hasAnyJSONTag = hasAnyJSONTag || hasTag
-			if tag == "-" {
-				// Fields omitted in json can be ignored
+			err := e.jsonSafeField(t, ut, i, level, seenTypes, v2, &s)
+			if err == nil {
 				continue
 			}
-			isExported := field.Exported()
-			if !isExported && v2 && field.Embedded() && isStruct(field.Type()) {
-				// encoding/json/v2 encodes the exported fields of embedded
-				// structs of unexported types. Such fields are therefore
-				// checked like exported fields, but do not count as exported
-				// for the report-no-exported flag.
-				isExported = true
-			}
-			if !isExported {
-				if field.Embedded() {
-					// encoding/json/v2 rejects embedded fields of unexported
-					// non-struct types (with or without a JSON name). Embedded
-					// structs of unexported types are handled above.
-					if v2 {
-						return fmt.Errorf("unsafe embedded field `%s` of unexported non-struct type found", field.Name())
-					}
-					// Embedded fields of unexported types may still forward
-					// exported fields.
-					hasAnyJSONField = true
-				} else if v2 && hasTag {
-					// encoding/json/v2 rejects json struct tags (other than
-					// `json:"-"`) on unexported fields.
-					return fmt.Errorf("unsafe struct tag on unexported field `%s` found", field.Name())
-				}
-				// Otherwise, unexported fields are ignored.
-				continue
-			}
-			hasAnyJSONField = true
-			name, options := parseJSONTag(tag)
-			// encoding/json/v2 rejects JSON object names containing a backslash
-			// or quote characters (including single-quoted names).
-			if v2 && strings.ContainsAny(name, "\\'\"`") {
-				return fmt.Errorf("unsafe JSON object name `%s` on field `%s` found", name, field.Name())
-			}
-			if v2 && !utf8.ValidString(name) {
-				return fmt.Errorf("unsafe JSON object name with invalid UTF-8 on field `%s` found", field.Name())
-			}
-			// encoding/json/v2 rejects embedded fields of non-struct types
-			// (e.g. named basic types, slices or interfaces) without a JSON name.
-			if v2 && field.Embedded() && name == "" && !isStruct(field.Type()) {
-				return fmt.Errorf("unsafe embedded field `%s` of non-struct type without JSON name found", field.Name())
-			}
-			// Embedded struct without JSON name.
-			implicitEmbed := field.Embedded() && name == "" && isStruct(field.Type())
-			for _, option := range options {
-				// Since Go 1.27, the `format` option is rejected by encoding/json
-				// and encoding/json/v2 for all types, because support for it was
-				// removed (see https://go.dev/issue/79071). encoding/json/v2
-				// rejects any `format` option, encoding/json only a `format`
-				// option with a valid value on fields other than embedded
-				// structs without JSON name.
-				if v2 && strings.HasPrefix(option, "format:") {
-					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
-				}
-				if !v2 && isFormatOptionWithValue(option) && !implicitEmbed {
-					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
-				}
-				// encoding/json/v2 rejects the `string` option on non-numeric types.
-				if v2 && option == "string" && !isNumeric(field.Type()) {
-					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
-				}
-			}
-			// Fields embedded by encoding/json/v2: embedded struct fields without
-			// a JSON name and fields with the `embed` option.
-			embed := false
-			if v2 {
-				seenOptions, option, err := checkJSONTagOptionsV2(options)
-				if err != nil {
-					return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found: %v", option, field.Name(), err)
-				}
-				// Fields with the `inline` or `unknown` options are embedded
-				// by encoding/json/v2 of Go 1.26 (GOEXPERIMENT=jsonv2), but
-				// are regular fields as of Go 1.27.
-				embed = seenOptions["embed"] || implicitEmbed
-				switch {
-				case embed || seenOptions["inline"] || seenOptions["unknown"]:
-					err := checkJSONEmbedV2(field.Type(), name, seenOptions)
-					if err != nil {
-						return fmt.Errorf("unsafe embedded field `%s` found: %v", field.Name(), err)
-					}
-				case !field.Exported():
-					// Embedded struct of an unexported type with a JSON name,
-					// encoded as regular field. Methods of the unexported type
-					// can not be called.
-					ft := field.Type()
-					if p, ok := ft.Underlying().(*types.Pointer); ok {
-						ft = p.Elem()
-					}
-					if implementsJSONMethods(ft) || (seenOptions["omitzero"] && implementsIsZero(ft)) {
-						return fmt.Errorf("unsafe field `%s` of unexported type with methods for JSON encoding found", field.Name())
-					}
-				}
-			}
-			// encoding/json/v2 rejects structs, where two direct fields use the
-			// same JSON object name. Conflicts with fields promoted from embedded
-			// structs (without an explicit name) are not an error, they are
-			// resolved by the Go embedding rules.
-			if v2 && !embed {
-				if name == "" {
-					name = field.Name()
-				}
-				if _, ok := names[name]; ok {
-					return fmt.Errorf("unsafe duplicate JSON object name `%s` in struct `%s` found", name, t.String())
-				}
-				names[name] = struct{}{}
-			}
-			err := e.jsonSafe(field.Type(), level+1, seenTypes, v2)
-			if err != nil {
+			if _, ok := err.(unsupported); ok || !v2 {
 				return err
 			}
-			if field.Exported() {
-				exported++
+			// For encoding/json/v2, many types are unsafe (e.g. string),
+			// therefore the remaining fields are checked as well, because an
+			// unsupported field takes precedence over an unsafe field.
+			if firstErr == nil {
+				firstErr = err
 			}
 		}
-		if e.reportNoExported && level == 0 && exported == 0 {
+		if firstErr != nil {
+			return firstErr
+		}
+		if e.reportNoExported && level == 0 && s.exported == 0 {
 			return newNoexportedError(fmt.Errorf("struct does not export any field"))
 		}
 		// encoding/json/v2 rejects structs, which have fields, but neither a
 		// field considered for encoding nor any json struct tag.
-		if v2 && ut.NumFields() > 0 && !hasAnyJSONField && !hasAnyJSONTag {
+		if v2 && ut.NumFields() > 0 && !s.hasAnyJSONField && !s.hasAnyJSONTag {
 			return fmt.Errorf("unsafe struct `%s` without exported fields found", t.String())
 		}
 		return nil
 
 	case *types.Pointer:
 		err := e.jsonSafe(ut.Elem(), level+1, seenTypes, v2)
+		if v2 {
+			// encoding/json/v2 encodes a nil pointer as null.
+			err = demoteUnsupported(err)
+		}
 		if err != nil {
 			return err
 		}
@@ -465,10 +382,20 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 
 	case *types.Map:
 		err := jsonSafeMapKey(ut.Key(), v2)
+		if v2 {
+			// encoding/json/v2 encodes nil and empty maps without
+			// considering the key type.
+			err = demoteUnsupported(err)
+		}
 		if err != nil {
 			return err
 		}
 		err = e.jsonSafe(ut.Elem(), level+1, seenTypes, v2)
+		if v2 {
+			// encoding/json/v2 encodes nil and empty maps without
+			// considering the element type.
+			err = demoteUnsupported(err)
+		}
 		if err != nil {
 			return err
 		}
@@ -482,6 +409,188 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 		// Types that are not supported for encoding to json or are not completely safe, like: interfaces
 		return fmt.Errorf("unsafe type `%s` found", t.String())
 	}
+}
+
+// structState holds the state collected by jsonSafeField while checking the
+// fields of a struct.
+type structState struct {
+	exported        int                 // number of exported fields.
+	hasAnyJSONTag   bool                // any field has a json struct tag (including `json:"-"`).
+	hasAnyJSONField bool                // any field is considered for encoding.
+	names           map[string]struct{} // JSON object names of the direct fields (encoding/json/v2).
+}
+
+// jsonSafeField checks the i-th field of the struct ut (the underlying type of
+// t), if encoding it to JSON can fail.
+func (e *errchkjson) jsonSafeField(t types.Type, ut *types.Struct, i int, level int, seenTypes map[types.Type]struct{}, v2 bool, s *structState) error {
+	field := ut.Field(i)
+	tag, hasTag := reflect.StructTag(ut.Tag(i)).Lookup("json")
+	s.hasAnyJSONTag = s.hasAnyJSONTag || hasTag
+	if tag == "-" {
+		// Fields omitted in json can be ignored
+		return nil
+	}
+	name, options := parseJSONTag(tag)
+	isExported := field.Exported()
+	if !isExported && v2 && field.Embedded() && isStruct(field.Type()) {
+		// encoding/json/v2 encodes the exported fields of embedded
+		// structs of unexported types. Such fields are therefore
+		// checked like exported fields, but do not count as exported
+		// for the report-no-exported flag.
+		isExported = true
+	}
+	if !isExported {
+		if field.Embedded() {
+			// encoding/json/v2 rejects embedded fields of unexported
+			// non-struct types (with or without a JSON name). Embedded
+			// structs of unexported types are handled above.
+			if v2 {
+				return fmt.Errorf("unsafe embedded field `%s` of unexported non-struct type found", field.Name())
+			}
+			// Embedded fields of unexported types may still forward
+			// exported fields.
+			s.hasAnyJSONField = true
+			// Since Go 1.27, encoding/json rejects the `format` option on
+			// embedded structs of unexported types with a JSON name, unless
+			// the methods of the type prevent the field from being encoded.
+			option, hasFormat := formatOptionWithValue(tag)
+			if hasFormat && name != "" && isStruct(field.Type()) && !unexportedMethodsV2(field.Type(), slices.Contains(options, "omitzero")) {
+				return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
+			}
+		} else if v2 && hasTag {
+			// encoding/json/v2 rejects json struct tags (other than
+			// `json:"-"`) on unexported fields.
+			return fmt.Errorf("unsafe struct tag on unexported field `%s` found", field.Name())
+		}
+		// Otherwise, unexported fields are ignored.
+		return nil
+	}
+	s.hasAnyJSONField = true
+
+	tagErr := checkJSONTag(t, field, tag, name, options, v2, s)
+
+	err := e.jsonSafe(field.Type(), level+1, seenTypes, v2)
+	if v2 && slices.Contains(options, "omitzero") {
+		// encoding/json/v2 omits the zero value without encoding it.
+		err = demoteUnsupported(err)
+	}
+	if _, ok := err.(unsupported); ok && v2 {
+		// An unsupported type takes precedence over an unsafe struct tag.
+		return err
+	}
+	if tagErr != nil {
+		return tagErr
+	}
+	if err != nil {
+		return err
+	}
+	if field.Exported() {
+		s.exported++
+	}
+	return nil
+}
+
+// checkJSONTag checks the json struct tag of the field, which is considered
+// for encoding.
+func checkJSONTag(t types.Type, field *types.Var, tag string, name string, options []string, v2 bool, s *structState) error {
+	// encoding/json/v2 rejects JSON object names containing a backslash
+	// or quote characters (including single-quoted names).
+	if v2 && strings.ContainsAny(name, "\\'\"`") {
+		return fmt.Errorf("unsafe JSON object name `%s` on field `%s` found", name, field.Name())
+	}
+	if v2 && !utf8.ValidString(name) {
+		return fmt.Errorf("unsafe JSON object name with invalid UTF-8 on field `%s` found", field.Name())
+	}
+	// encoding/json/v2 of Go 1.26 (GOEXPERIMENT=jsonv2) rejects the JSON
+	// object name `-` (e.g. `json:"-,omitempty"`).
+	if v2 && name == "-" {
+		return fmt.Errorf("unsafe JSON object name `-` on field `%s` found", field.Name())
+	}
+	// encoding/json/v2 rejects embedded fields of non-struct types
+	// (e.g. named basic types, slices or interfaces) without a JSON name.
+	if v2 && field.Embedded() && name == "" && !isStruct(field.Type()) {
+		return fmt.Errorf("unsafe embedded field `%s` of non-struct type without JSON name found", field.Name())
+	}
+	// Embedded struct without JSON name.
+	implicitEmbed := field.Embedded() && name == "" && isStruct(field.Type())
+	// Since Go 1.27, the `format` option is rejected by encoding/json and
+	// encoding/json/v2 for all types, because support for it was removed
+	// (see https://go.dev/issue/79071). encoding/json/v2 rejects any `format`
+	// option, encoding/json only a `format` option with a valid value on
+	// fields other than embedded structs without JSON name.
+	if option, ok := formatOptionWithValue(tag); !v2 && !implicitEmbed && ok {
+		return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
+	}
+	if !v2 {
+		return nil
+	}
+	for _, option := range options {
+		if strings.HasPrefix(option, "format:") {
+			return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
+		}
+		// encoding/json/v2 rejects the `string` option on non-numeric types.
+		if option == "string" && !isNumeric(field.Type()) {
+			return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
+		}
+	}
+	seenOptions, option, err := checkJSONTagOptionsV2(options)
+	if err != nil {
+		return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found: %v", option, field.Name(), err)
+	}
+	// Fields embedded by encoding/json/v2: embedded struct fields without
+	// a JSON name and fields with the `embed` option. Fields with the
+	// `inline` or `unknown` options are embedded by encoding/json/v2 of
+	// Go 1.26 (GOEXPERIMENT=jsonv2), but are regular fields as of Go 1.27.
+	switch {
+	case implicitEmbed || seenOptions["embed"] || seenOptions["inline"] || seenOptions["unknown"]:
+		err := checkJSONEmbedV2(field.Type(), name, seenOptions)
+		if err != nil {
+			return fmt.Errorf("unsafe embedded field `%s` found: %v", field.Name(), err)
+		}
+	case !field.Exported():
+		// Embedded struct of an unexported type with a JSON name,
+		// encoded as regular field. Methods of the unexported type
+		// can not be called.
+		if unexportedMethodsV2(field.Type(), seenOptions["omitzero"]) {
+			return fmt.Errorf("unsafe field `%s` of unexported type with methods for JSON encoding found", field.Name())
+		}
+	}
+	// encoding/json/v2 rejects structs, where two direct fields use the
+	// same JSON object name. Conflicts with fields promoted from embedded
+	// structs (without an explicit name) are not an error, they are
+	// resolved by the Go embedding rules. Fields with the `embed` option
+	// are regular fields for encoding/json/v2 of Go 1.26 (the option is
+	// unknown) and are therefore checked as well.
+	if !implicitEmbed {
+		if name == "" {
+			name = field.Name()
+		}
+		if _, ok := s.names[name]; ok {
+			return fmt.Errorf("unsafe duplicate JSON object name `%s` in struct `%s` found", name, t.String())
+		}
+		s.names[name] = struct{}{}
+	}
+	return nil
+}
+
+// unexportedMethodsV2 reports, if encoding/json/v2 rejects an embedded struct
+// field of the unexported type t (or *t) with a JSON name, because methods of
+// the type can not be called.
+func unexportedMethodsV2(t types.Type, omitzero bool) bool {
+	if p, ok := t.Underlying().(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	return implementsJSONMethods(t) || (omitzero && implementsIsZero(t))
+}
+
+// demoteUnsupported turns an unsupported error into an unsafe error. It is
+// used, where encoding/json/v2 only fails for some values of an unsupported
+// type (e.g. a non-empty slice of channels).
+func demoteUnsupported(err error) error {
+	if _, ok := err.(unsupported); ok {
+		return errors.New(err.Error())
+	}
+	return err
 }
 
 func jsonSafeMapKey(t types.Type, v2 bool) error {
@@ -516,10 +625,6 @@ func jsonSafeMapKey(t types.Type, v2 bool) error {
 		}
 		// encoding/json/v2 encodes pointer map keys like the pointed to
 		// value, but fails for nil pointers.
-		err := jsonSafeMapKey(ut.Elem(), v2)
-		if _, ok := err.(unsupported); ok {
-			return err
-		}
 		return fmt.Errorf("unsafe type `%s` as map key found", t.String())
 	default:
 		// E.g. struct composed solely of basic types, that are comparable
@@ -639,17 +744,76 @@ func isJSONTextValue(t types.Type) bool {
 	return obj.Pkg() != nil && obj.Pkg().Path() == "encoding/json/jsontext" && obj.Name() == "Value"
 }
 
-// isFormatOptionWithValue reports, if option is a `format` option with a value,
-// which is accepted by the parser of the json struct tag (a Go identifier or a
-// non-empty single-quoted string). Since Go 1.27, encoding/json rejects such
-// options. Without a valid value, the option is ignored by encoding/json.
-func isFormatOptionWithValue(option string) bool {
-	value, ok := strings.CutPrefix(option, "format:")
-	if !ok {
-		return false
+// formatOptionWithValue reports, if the json struct tag contains a `format`
+// option with a value, which is accepted by the parser of the json struct tag
+// (a Go identifier or a non-empty single-quoted string), and returns the
+// option. Since Go 1.27, encoding/json rejects such options. Without a valid
+// value, the option is ignored by encoding/json.
+func formatOptionWithValue(tag string) (string, bool) {
+	_, rest, found := strings.Cut(tag, ",")
+	for found {
+		if value, ok := strings.CutPrefix(rest, "format:"); ok {
+			v, n, ok := consumeTagOptionValue(value)
+			if ok && v != "" {
+				return "format:" + value[:n], true
+			}
+			rest = value[n:]
+		}
+		_, rest, found = strings.Cut(rest, ",")
 	}
-	r, _ := utf8.DecodeRuneInString(value)
-	return r == '_' || unicode.IsLetter(r) || (r == '\'' && value != "''")
+	return "", false
+}
+
+// consumeTagOptionValue parses the value of a json struct tag option (a Go
+// identifier or a single-quoted string) at the start of in, like the parser of
+// encoding/json/v2 does. It returns the value and the number of consumed
+// bytes. If the value is malformed, ok is false and the bytes up to the next
+// comma are consumed.
+func consumeTagOptionValue(in string) (value string, n int, ok bool) {
+	i := strings.IndexByte(in, ',')
+	if i < 0 {
+		i = len(in)
+	}
+
+	switch r, _ := utf8.DecodeRuneInString(in); {
+	case r == '_' || unicode.IsLetter(r):
+		n := len(in) - len(strings.TrimLeftFunc(in, isLetterOrDigit))
+		return in[:n], n, true
+	case r == '\'':
+		// Convert the single-quoted string to a double-quoted string and
+		// rely on strconv.Unquote to handle the rest.
+		inEscape := false
+		b := []byte{'"'}
+		n := len("'")
+		for len(in) > n {
+			r, rn := utf8.DecodeRuneInString(in[n:])
+			switch {
+			case inEscape:
+				if r == '\'' {
+					b = b[:len(b)-1] // remove escape character: `\'` => `'`
+				}
+				inEscape = false
+			case r == '\\':
+				inEscape = true
+			case r == '"':
+				b = append(b, '\\') // insert escape character: `"` => `\"`
+			case r == '\'':
+				b = append(b, '"')
+				n += len("'")
+				out, err := strconv.Unquote(string(b))
+				if err != nil {
+					return "", i, false
+				}
+				return out, n, true
+			}
+			b = append(b, in[n:][:rn]...)
+			n += rn
+		}
+		// Single-quoted string not terminated.
+		return "", i, false
+	default:
+		return "", i, false
+	}
 }
 
 // isByte reports, if t is the predeclared type byte (uint8). Named byte types
@@ -674,13 +838,20 @@ func parseJSONTag(tag string) (string, []string) {
 }
 
 // isNumeric reports, if t (after dereferencing pointers) is an integer or
-// float type.
+// float type. A named pointer type referencing itself (e.g. `type P *P`) is
+// considered numeric, because no value of such a type ends in a non-numeric
+// value (only nil or a cycle).
 func isNumeric(t types.Type) bool {
+	seen := map[types.Type]bool{}
 	for {
 		p, ok := t.Underlying().(*types.Pointer)
 		if !ok {
 			break
 		}
+		if seen[t] {
+			return true
+		}
+		seen[t] = true
 		t = p.Elem()
 	}
 	b, ok := t.Underlying().(*types.Basic)

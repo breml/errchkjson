@@ -34,3 +34,37 @@ func TestParseJSONTag(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatOptionWithValue(t *testing.T) {
+	tests := []struct {
+		tag        string
+		wantOption string
+		wantOK     bool
+	}{
+		{tag: "", wantOK: false},
+		{tag: "format:x", wantOK: false}, // name, not an option
+		{tag: "a,format:x", wantOption: "format:x", wantOK: true},
+		{tag: "a,omitempty,format:RFC3339", wantOption: "format:RFC3339", wantOK: true},
+		{tag: "a,format:x-y", wantOption: "format:x", wantOK: true},
+		{tag: "a,format:", wantOK: false},
+		{tag: "a,format", wantOK: false},
+		{tag: "a,format:123", wantOK: false},
+		{tag: "a,format:''", wantOK: false},
+		{tag: "a,format:'abc", wantOK: false},
+		{tag: "a,format:'abc,omitempty", wantOK: false},
+		{tag: "a,format:'2006-01-02'", wantOption: "format:'2006-01-02'", wantOK: true},
+		{tag: "a,format:'a,b'", wantOption: "format:'a,b'", wantOK: true},
+		{tag: `a,format:'it\'s'`, wantOption: `format:'it\'s'`, wantOK: true},
+		{tag: `a,format:'\z'`, wantOK: false}, // invalid escape sequence
+		{tag: "a,format:'abc,format:x", wantOption: "format:x", wantOK: true},
+		{tag: "a,'format:x'", wantOK: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.tag, func(t *testing.T) {
+			option, ok := formatOptionWithValue(tc.tag)
+			if option != tc.wantOption || ok != tc.wantOK {
+				t.Errorf("formatOptionWithValue(%q) = %q, %t, want %q, %t", tc.tag, option, ok, tc.wantOption, tc.wantOK)
+			}
+		})
+	}
+}
