@@ -803,6 +803,13 @@ type recursivePtr *recursivePtr
 
 // JSONMarshalRecursiveTypes contains test cases for recursive types, which
 // are not structs.
+//
+// Recursive types are considered safe for encoding/json, although encoding
+// fails for cyclic values and, as of Go 1.27, for values with a nesting depth
+// larger than 10000 (known false negative, kept for backwards compatibility,
+// see https://github.com/breml/errchkjson/issues/94). For recursivePtr, a
+// cyclic value leads to a stack overflow as of Go 1.27 (see
+// https://go.dev/issue/82947).
 func JSONMarshalRecursiveTypes() {
 	var err error
 

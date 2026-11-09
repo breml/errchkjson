@@ -202,7 +202,7 @@ func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fn
 			t = t.(*types.Pointer).Elem()
 		}
 
-		err = e.jsonSafe(t, 0, map[types.Type]struct{}{}, jf.v2)
+		err = e.jsonSafe(t, 0, map[types.Type]bool{}, jf.v2)
 		if jf.encoderOpts {
 			// The options of the encoder (e.g. json.WithMarshalers passed to
 			// jsontext.NewEncoder) can change the encoding of any type,
@@ -266,15 +266,30 @@ func callArgTypes(pass *analysis.Pass, ce *ast.CallExpr, expandTuple bool) []typ
 
 // jsonSafe checks, if encoding a value of type t to JSON can fail. If v2 is
 // true, the rules of encoding/json/v2 are applied.
-func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]struct{}, v2 bool) error {
-	if _, ok := seenTypes[t]; ok {
+//
+// seenTypes contains the named types and structs, which have already been
+// checked (false) or are currently being checked (true).
+func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]bool, v2 bool) error {
+	if inProgress, ok := seenTypes[t]; ok {
+		// A type, which is currently being checked, is recursive (e.g.
+		// `type Node struct{ Next *Node }` or `type Tree map[string]Tree`).
+		// encoding/json/v2 fails for cyclic values and values exceeding the
+		// maximum nesting depth. For encoding/json, recursive types are
+		// considered safe for backwards compatibility (see
+		// https://github.com/breml/errchkjson/issues/94).
+		if inProgress && v2 {
+			return fmt.Errorf("unsafe recursive type `%s` found", t.String())
+		}
 		return nil
 	}
 	// Named types may be recursive without a struct being involved (e.g.
 	// `type Tree map[string]Tree`), mark them as seen to prevent an infinite
 	// recursion.
-	if _, ok := types.Unalias(t).(*types.Named); ok {
-		seenTypes[t] = struct{}{}
+	_, isNamed := types.Unalias(t).(*types.Named)
+	_, isStruct := t.Underlying().(*types.Struct)
+	if isNamed || isStruct {
+		seenTypes[t] = true
+		defer func() { seenTypes[t] = false }()
 	}
 
 	if implementsMarshaler(t, v2) {
@@ -338,7 +353,6 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, seenTypes map[types.Type]
 		return nil
 
 	case *types.Struct:
-		seenTypes[t] = struct{}{}
 		s := structState{names: map[string]struct{}{}}
 		var firstErr error
 		for i := 0; i < ut.NumFields(); i++ {
@@ -422,7 +436,7 @@ type structState struct {
 
 // jsonSafeField checks the i-th field of the struct ut (the underlying type of
 // t), if encoding it to JSON can fail.
-func (e *errchkjson) jsonSafeField(t types.Type, ut *types.Struct, i int, level int, seenTypes map[types.Type]struct{}, v2 bool, s *structState) error {
+func (e *errchkjson) jsonSafeField(t types.Type, ut *types.Struct, i int, level int, seenTypes map[types.Type]bool, v2 bool, s *structState) error {
 	field := ut.Field(i)
 	tag, hasTag := reflect.StructTag(ut.Tag(i)).Lookup("json")
 	s.hasAnyJSONTag = s.hasAnyJSONTag || hasTag

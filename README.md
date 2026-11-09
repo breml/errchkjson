@@ -139,6 +139,9 @@ types are the same as above, with the following differences:
 * `string` (including named string types and string map keys) is unsafe, because `encoding/json/v2`
   returns an error for strings containing invalid UTF-8.
 * `time.Duration` is unsafe, because it has no default representation in `encoding/json/v2`.
+* Recursive types (e.g. `type Node struct{ Next *Node }` or `type Tree map[string]Tree`) are unsafe,
+  because `encoding/json/v2` returns an error for cyclic values and for values with a nesting depth
+  larger than 10000.
 * Types, which implement one of the marshaler interfaces with a pointer receiver (e.g. `func (*T) MarshalJSON() ([]byte, error)`),
   are unsafe, even if they are passed by value, because `encoding/json/v2` always calls these methods.
 * Map keys of types, which are not safe (e.g. `map[float64]string`, `map[*int]string` or `map[bool]string`),
@@ -190,6 +193,11 @@ Because `MarshalWrite` and `MarshalEncode` may return errors unrelated to the en
 For `encoding/json.MarshalIndent`, there is a (pathological) edge case, where this
 function could [return an error](https://cs.opensource.google/go/go/+/refs/tags/go1.18:src/encoding/json/scanner.go;drc=refs%2Ftags%2Fgo1.18;l=181) for an otherwise safe argument, if the argument has
 a nesting depth larger than [`10000`](https://cs.opensource.google/go/go/+/refs/tags/go1.18:src/encoding/json/scanner.go;drc=refs%2Ftags%2Fgo1.18;l=144) (as of Go 1.18).
+
+As of Go 1.27, this nesting depth limit applies to all functions of `encoding/json`. In addition, encoding
+fails for cyclic values (with all Go versions). For `encoding/json`, recursive types, which allow such values
+(e.g. `type Node struct{ Next *Node }`), are nevertheless considered safe for backwards compatibility
+(see [#94](https://github.com/breml/errchkjson/issues/94)). For `encoding/json/v2`, recursive types are unsafe.
 
 ## Bugs found during development
 

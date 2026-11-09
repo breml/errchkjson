@@ -1124,13 +1124,15 @@ func JSONv2MarshalMiscellaneous() {
 	_, err = stdjson.Marshal(mapByteArrayKey) // want "`encoding/json.Marshal` for unsupported type `\\[2\\]byte` as map key found"
 	_ = err
 
-	// Recursive types.
+	// Recursive types, see JSONv2MarshalRecursiveTypes.
 	var recursiveMap recursiveMapV2
-	_, err = json.Marshal(recursiveMap) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_, _ = json.Marshal(recursiveMap)   // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe recursive type `jsonv2.recursiveMapV2` found"
+	_, err = json.Marshal(recursiveMap) // err is checked
 	_ = err
 
 	var recursiveSlice recursiveSliceV2
-	_, err = json.Marshal(recursiveSlice) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_, _ = json.Marshal(recursiveSlice)   // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe recursive type `jsonv2.recursiveSliceV2` found"
+	_, err = json.Marshal(recursiveSlice) // err is checked
 	_ = err
 }
 
@@ -1178,11 +1180,15 @@ func JSONv2MarshalSelfReferencingPointers() {
 	_ = err
 
 	// The `string` option never fails for a self-referencing pointer type,
-	// because every value ends in nil (or a cycle, see #94).
+	// because every value ends in nil or a cycle. A cycle is not detected by
+	// encoding/json/v2 and leads to a stack overflow (see
+	// https://go.dev/issue/82947), the type is therefore unsafe as recursive
+	// type.
 	var stringSelfPtr struct {
 		X selfPtr `json:",string"`
 	}
-	_, err = json.Marshal(stringSelfPtr) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_, _ = json.Marshal(stringSelfPtr)   // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe recursive type `jsonv2.selfPtr` found"
+	_, err = json.Marshal(stringSelfPtr) // err is checked
 	_ = err
 }
 
@@ -1294,5 +1300,84 @@ func JSONv2MarshalEncodeEncoderOptions() {
 		return []byte(`"chan"`), nil
 	})))
 	err := json.MarshalEncode(enc, make(chan int)) // err is checked
+	_ = err
+}
+
+type node struct {
+	ID   int
+	Next *node
+}
+
+type treeNode struct {
+	Children []treeNode
+}
+
+type mutualA struct {
+	B *mutualB
+}
+
+type mutualB struct {
+	A []mutualA
+}
+
+type genericList[T any] struct {
+	Value T
+	Next  *genericList[T]
+}
+
+type notRecursive struct {
+	A inner
+	B inner
+	C *inner
+}
+
+type recursiveIgnored struct {
+	ID   int
+	Next *recursiveIgnored `json:"-"`
+	prev *recursiveIgnored
+}
+
+// JSONv2MarshalRecursiveTypes contains test cases for recursive types.
+// encoding/json/v2 returns an error for cyclic values and for values with a
+// nesting depth larger than 10000, recursive types are therefore unsafe (see
+// https://github.com/breml/errchkjson/issues/94).
+func JSONv2MarshalRecursiveTypes() {
+	var err error
+
+	var n node
+	_, _ = json.Marshal(n)   // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe recursive type `jsonv2.node` found"
+	_, err = json.Marshal(n) // err is checked
+	_ = err
+
+	_, _ = json.Marshal(&n) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe recursive type `jsonv2.node` found"
+
+	var nodes []node
+	_, _ = json.Marshal(nodes) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe recursive type `jsonv2.node` found"
+
+	var tree treeNode
+	_, _ = json.Marshal(tree) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe recursive type `jsonv2.treeNode` found"
+
+	var mutual mutualA
+	_, _ = json.Marshal(mutual) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe recursive type `jsonv2.mutualA` found"
+
+	var list genericList[int]
+	_, _ = json.Marshal(list) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe recursive type `jsonv2.genericList\\[int\\]` found"
+
+	var p selfPtr
+	_, _ = json.Marshal(p) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe recursive type `jsonv2.selfPtr` found"
+
+	// Types used more than once are not recursive.
+	var nr notRecursive
+	_, err = json.Marshal(nr) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// Fields, which are not encoded, are not considered.
+	var ri recursiveIgnored
+	_, err = json.Marshal(ri) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// encoding/json is unchanged (known false negative, see
+	// https://github.com/breml/errchkjson/issues/94).
+	_, err = stdjson.Marshal(n) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
 }
