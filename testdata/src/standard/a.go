@@ -536,8 +536,8 @@ func JSONMarshalUnsafeTypes() {
 }
 
 // JSONMarshalInvalidTypes contains a multitude of test cases to marshal different combinations of types to JSON,
-// that are invalid and not supported by json.Marshal, that is they will always return an error, if these types used
-// with json.Marshal.
+// that are invalid and not supported by json.Marshal. Most of them will always return an error, if these types are
+// used with json.Marshal, others only fail for some values (e.g. non-empty slices).
 func JSONMarshalInvalidTypes() {
 	var err error
 
@@ -553,68 +553,71 @@ func JSONMarshalInvalidTypes() {
 	_, err = json.Marshal(c128) // want "`encoding/json.Marshal` for unsupported type `complex128` found"
 	_ = err
 
+	// nil and empty slices (and nil pointers) of unsupported types are encoded
+	// without error. The same applies to nil and empty maps with keys of
+	// unsupported types as of Go 1.27. These types are therefore unsafe.
 	var sliceC64 []complex64
-	_, _ = json.Marshal(sliceC64)   // want "`encoding/json.Marshal` for unsupported type `complex64` found"
-	_, err = json.Marshal(sliceC64) // want "`encoding/json.Marshal` for unsupported type `complex64` found"
+	_, _ = json.Marshal(sliceC64)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `complex64` found"
+	_, err = json.Marshal(sliceC64) // err is checked
 	_ = err
 
 	var sliceC128 []complex128
-	_, _ = json.Marshal(sliceC128)   // want "`encoding/json.Marshal` for unsupported type `complex128` found"
-	_, err = json.Marshal(sliceC128) // want "`encoding/json.Marshal` for unsupported type `complex128` found"
+	_, _ = json.Marshal(sliceC128)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `complex128` found"
+	_, err = json.Marshal(sliceC128) // err is checked
 	_ = err
 
 	var arrayC64 []complex64
-	_, _ = json.Marshal(arrayC64)   // want "`encoding/json.Marshal` for unsupported type `complex64` found"
-	_, err = json.Marshal(arrayC64) // want "`encoding/json.Marshal` for unsupported type `complex64` found"
+	_, _ = json.Marshal(arrayC64)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `complex64` found"
+	_, err = json.Marshal(arrayC64) // err is checked
 	_ = err
 
 	var arrayC128 []complex128
-	_, _ = json.Marshal(arrayC128)   // want "`encoding/json.Marshal` for unsupported type `complex128` found"
-	_, err = json.Marshal(arrayC128) // want "`encoding/json.Marshal` for unsupported type `complex128` found"
+	_, _ = json.Marshal(arrayC128)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `complex128` found"
+	_, err = json.Marshal(arrayC128) // err is checked
 	_ = err
 
 	var structPtrC64 struct {
 		C64 *complex64
 	}
-	_, _ = json.Marshal(structPtrC64)   // want "`encoding/json.Marshal` for unsupported type `complex64` found"
-	_, err = json.Marshal(structPtrC64) // want "`encoding/json.Marshal` for unsupported type `complex64` found"
+	_, _ = json.Marshal(structPtrC64)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `complex64` found"
+	_, err = json.Marshal(structPtrC64) // err is checked
 	_ = err
 
 	var structPtrC128 struct {
 		C128 *complex128
 	}
-	_, _ = json.Marshal(structPtrC128)   // want "`encoding/json.Marshal` for unsupported type `complex128` found"
-	_, err = json.Marshal(structPtrC128) // want "`encoding/json.Marshal` for unsupported type `complex128` found"
+	_, _ = json.Marshal(structPtrC128)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `complex128` found"
+	_, err = json.Marshal(structPtrC128) // err is checked
 	_ = err
 
 	var mapBoolStr map[bool]string
-	_, _ = json.Marshal(mapBoolStr)   // want "`encoding/json.Marshal` for unsupported type `bool` as map key found"
-	_, err = json.Marshal(mapBoolStr) // want "`encoding/json.Marshal` for unsupported type `bool` as map key found"
+	_, _ = json.Marshal(mapBoolStr)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `bool` as map key found"
+	_, err = json.Marshal(mapBoolStr) // err is checked
 	_ = err
 
 	var mapF32Str map[float32]string
-	_, _ = json.Marshal(mapF32Str)   // want "`encoding/json.Marshal` for unsupported type `float32` as map key found"
-	_, err = json.Marshal(mapF32Str) // want "`encoding/json.Marshal` for unsupported type `float32` as map key found"
+	_, _ = json.Marshal(mapF32Str)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `float32` as map key found"
+	_, err = json.Marshal(mapF32Str) // err is checked
 	_ = err
 
 	var mapF64Str map[float64]string
-	_, _ = json.Marshal(mapF64Str)   // want "`encoding/json.Marshal` for unsupported type `float64` as map key found"
-	_, err = json.Marshal(mapF64Str) // want "`encoding/json.Marshal` for unsupported type `float64` as map key found"
+	_, _ = json.Marshal(mapF64Str)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `float64` as map key found"
+	_, err = json.Marshal(mapF64Str) // err is checked
 	_ = err
 
 	var mapC64Str map[complex64]string
-	_, _ = json.Marshal(mapC64Str)   // want "`encoding/json.Marshal` for unsupported type `complex64` as map key found"
-	_, err = json.Marshal(mapC64Str) // want "`encoding/json.Marshal` for unsupported type `complex64` as map key found"
+	_, _ = json.Marshal(mapC64Str)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `complex64` as map key found"
+	_, err = json.Marshal(mapC64Str) // err is checked
 	_ = err
 
 	var mapC128Str map[complex128]string
-	_, _ = json.Marshal(mapC128Str)   // want "`encoding/json.Marshal` for unsupported type `complex128` as map key found"
-	_, err = json.Marshal(mapC128Str) // want "`encoding/json.Marshal` for unsupported type `complex128` as map key found"
+	_, _ = json.Marshal(mapC128Str)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `complex128` as map key found"
+	_, err = json.Marshal(mapC128Str) // err is checked
 	_ = err
 
 	mapStructStr := map[structKey]string{{1}: "str"}
-	_, _ = json.Marshal(mapStructStr)   // want "`encoding/json.Marshal` for unsupported type `standard.structKey` as map key found"
-	_, err = json.Marshal(mapStructStr) // want "`encoding/json.Marshal` for unsupported type `standard.structKey` as map key found"
+	_, _ = json.Marshal(mapStructStr)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `standard.structKey` as map key found"
+	_, err = json.Marshal(mapStructStr) // err is checked
 	_ = err
 
 	f := func() {}
@@ -739,8 +742,10 @@ func JSONMarshalGo127() {
 	_, err = json.Marshal(v2OnlyTagOptions) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
 
+	// As of Go 1.27, nil and empty maps with pointer keys are encoded without
+	// error.
 	var v2OnlyPtrMapKey map[*int]int
-	_, err = json.Marshal(v2OnlyPtrMapKey) // want "`encoding/json.Marshal` for unsupported type `\\*int` as map key found"
+	_, err = json.Marshal(v2OnlyPtrMapKey) // err is checked
 	_ = err
 
 	var v2OnlyNoExported struct {
@@ -906,5 +911,84 @@ func JSONMarshalFormatOptionParsing() {
 		embeddedUnexportedFormatMethod `json:"e,format:x"`
 	}
 	_, err = json.Marshal(formatTagEmbeddedUnexportedMethod) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+}
+
+// JSONMarshalNilValues contains test cases for unsupported types, which are
+// encoded without error for nil and empty values (e.g. nil slices, nil
+// pointers, zero values of fields with the `omitzero` option and, as of
+// Go 1.27, nil and empty maps with keys of unsupported types).
+func JSONMarshalNilValues() {
+	var err error
+
+	var arrayChan0 [0]chan int
+	_, err = json.Marshal(arrayChan0) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	var omitzeroChan struct {
+		C chan int `json:",omitzero"`
+	}
+	_, _ = json.Marshal(omitzeroChan)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `chan int` found"
+	_, err = json.Marshal(omitzeroChan) // err is checked
+	_ = err
+
+	var mapBoolField struct {
+		M map[bool]int
+	}
+	_, _ = json.Marshal(mapBoolField)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `bool` as map key found"
+	_, err = json.Marshal(mapBoolField) // err is checked
+	_ = err
+
+	// A nil pointer is encoded as null, unless the pointer is known to be
+	// non-nil.
+	var chanPtr *chan int
+	_, _ = json.Marshal(chanPtr)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `chan int` found"
+	_, err = json.Marshal(chanPtr) // err is checked
+	_ = err
+
+	ch := make(chan int)
+	_, err = json.Marshal(&ch) // want "`encoding/json.Marshal` for unsupported type `chan int` found"
+	_ = err
+
+	// The remaining fields are checked for unsupported types, if a field is
+	// only unsafe, because nil and empty values are encoded without error.
+	var sliceBeforeChan struct {
+		S []chan int
+		C chan int
+	}
+	_, err = json.Marshal(sliceBeforeChan) // want "`encoding/json.Marshal` for unsupported type `chan int` found"
+	_ = err
+
+	var sliceBeforeFloatAndChan struct {
+		S []chan int
+		F float64
+		C chan int
+	}
+	_, err = json.Marshal(sliceBeforeFloatAndChan) // want "`encoding/json.Marshal` for unsupported type `chan int` found"
+	_ = err
+
+	var sliceBeforeFloat struct {
+		S []chan int
+		F float64
+	}
+	_, _ = json.Marshal(sliceBeforeFloat)   // want "Error return value of `encoding/json.Marshal` is not checked: unsupported type `chan int` found"
+	_, err = json.Marshal(sliceBeforeFloat) // err is checked
+	_ = err
+
+	// For backwards compatibility, the check stops at the first unsafe field
+	// otherwise (known false negative).
+	var floatBeforeSliceAndChan struct {
+		F float64
+		S []chan int
+		C chan int
+	}
+	_, err = json.Marshal(floatBeforeSliceAndChan) // err is checked
+	_ = err
+
+	// An unsupported type takes precedence over an unsafe struct tag.
+	var formatChan struct {
+		C chan int `json:"c,format:x"`
+	}
+	_, err = json.Marshal(formatChan) // want "`encoding/json.Marshal` for unsupported type `chan int` found"
 	_ = err
 }

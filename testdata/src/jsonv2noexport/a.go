@@ -41,9 +41,9 @@ func JSONv2MarshalStructWithoutExportedFields() {
 		}
 	}
 	_ = nested.Inner.privateField
-	_, err = json.Marshal(nested) // err is checked
+	_, err = json.Marshal(nested) // want "`encoding/json/v2.Marshal` for unsupported struct .* without exported fields found"
 	_ = err
-	_, _ = json.Marshal(nested) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe struct .* without exported fields found"
+	_, _ = json.Marshal(nested) // want "`encoding/json/v2.Marshal` for unsupported struct .* without exported fields found"
 
 	// Fields promoted from embedded structs of unexported types do not count
 	// as exported fields for the report-no-exported flag (same as for
