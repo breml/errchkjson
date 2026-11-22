@@ -117,9 +117,10 @@ pointers (e.g. a struct field of type `*chan int` or a nil pointer passed to `js
 struct fields with the `omitzero` option are unsafe, because nil and empty values are encoded
 without error. A pointer, which is known to be non-nil (e.g. `json.Marshal(&ch)`), is forbidden.
 
-For structs, the first unsafe field is reported. If this field is only unsafe, because nil or empty
-values of a forbidden type are encoded without error (e.g. a field of type `[]chan int`), the
-remaining fields are checked for forbidden types as well.
+For structs, an unsupported (forbidden) field is reported, even if an earlier field is only unsafe
+for some values. Otherwise, the first unsafe field is reported. If this field is only unsafe,
+because nil or empty values of a forbidden type are encoded without error (e.g. a field of type
+`[]chan int`), the remaining fields are checked for forbidden types as well.
 
 ### Go 1.27 and later
 
@@ -233,9 +234,9 @@ function could [return an error](https://cs.opensource.google/go/go/+/refs/tags/
 a nesting depth larger than [`10000`](https://cs.opensource.google/go/go/+/refs/tags/go1.18:src/encoding/json/scanner.go;drc=refs%2Ftags%2Fgo1.18;l=144) (as of Go 1.18).
 
 As of Go 1.27, this nesting depth limit applies to all functions of `encoding/json`. In addition, encoding
-fails for cyclic values (with all Go versions). For `encoding/json`, recursive types, which allow such values
-(e.g. `type Node struct{ Next *Node }`), are nevertheless considered safe for backwards compatibility
-(see [#94](https://github.com/breml/errchkjson/issues/94)). For `encoding/json/v2`, recursive types are unsafe.
+fails for cyclic values (with all Go versions). Recursive types, which allow such values (e.g.
+`type Node struct{ Next *Node }`), are therefore reported as unsafe for `encoding/json` and `encoding/json/v2`
+(see [#94](https://github.com/breml/errchkjson/issues/94)).
 
 ## Bugs found during development
 

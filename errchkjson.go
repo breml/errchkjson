@@ -59,7 +59,28 @@ func (e *errchkjson) inspect(pass *analysis.Pass, n ast.Node) bool {
 	switch n := n.(type) {
 	case *ast.ReturnStmt:
 		// if the error is returned, it is the caller's responsibility to check
-		// the return value.
+		// the return value. The returned expressions are still inspected, so
+		// function literals and nested calls are checked.
+		e.inspectReturn(pass, n)
+		return false
+
+	case *ast.ExprStmt:
+		// The error of a JSON call used as a statement is discarded.
+		if ce, fnName, jf, ok := jsonFuncCall(pass, n.X); ok {
+			e.handleJSONMarshal(pass, ce, fnName, jf, blankIdentifier)
+			e.inspectArgs(pass, ce.Args)
+			return false
+		}
+		return true
+
+	case *ast.DeferStmt:
+		// The error of a deferred call is discarded.
+		e.inspectDiscardedCall(pass, n.Call)
+		return false
+
+	case *ast.GoStmt:
+		// The error of a call in a go statement is discarded.
+		e.inspectDiscardedCall(pass, n.Call)
 		return false
 
 	case *ast.CallExpr:
@@ -69,11 +90,14 @@ func (e *errchkjson) inspect(pass *analysis.Pass, n ast.Node) bool {
 		}
 
 		if jf, ok := jsonFuncs[fn.FullName()]; ok {
-			e.handleJSONMarshal(pass, n, fn.FullName(), jf, blankIdentifier)
-		} else {
+			// A JSON call in any other position than a statement or an
+			// assignment (e.g. a comparison, a switch tag, an element of a
+			// composite literal or a map value) uses the returned error.
+			e.handleJSONMarshal(pass, n, fn.FullName(), jf, functionArgument)
 			e.inspectArgs(pass, n.Args)
+			return false
 		}
-		return false
+		return true
 
 	case *ast.AssignStmt:
 		return e.inspectAssignment(pass, n.Lhs, n.Rhs, false)
@@ -100,11 +124,17 @@ func (e *errchkjson) inspectAssignment(pass *analysis.Pass, lhs []ast.Expr, rhs 
 		}
 		// For backwards compatibility, var declarations are not handled for
 		// encoding/json.Marshal and encoding/json.MarshalIndent, because this
-		// would add new findings (error checked but argument is safe).
+		// would add new findings (error checked but argument is safe). An error
+		// assigned to the blank identifier is still reported.
 		if valueSpec && !jf.v2 && !jf.alwaysOmitSafe {
-			return true
+			if evaluateMarshalErrorTarget(lhs[jf.errIdx]) == blankIdentifier {
+				e.handleJSONMarshal(pass, ce, fnName, jf, blankIdentifier)
+			}
+			e.inspectArgs(pass, ce.Args)
+			return false
 		}
 		e.handleJSONMarshal(pass, ce, fnName, jf, evaluateMarshalErrorTarget(lhs[jf.errIdx]))
+		e.inspectArgs(pass, ce.Args)
 		return false
 	}
 
@@ -118,6 +148,7 @@ func (e *errchkjson) inspectAssignment(pass *analysis.Pass, lhs []ast.Expr, rhs 
 		ce, fnName, jf, ok := jsonFuncCall(pass, expr)
 		if ok && jf.errIdx == 0 {
 			e.handleJSONMarshal(pass, ce, fnName, jf, evaluateMarshalErrorTarget(lhs[i]))
+			e.inspectArgs(pass, ce.Args)
 			continue
 		}
 		ast.Inspect(expr, func(n ast.Node) bool {
@@ -130,7 +161,7 @@ func (e *errchkjson) inspectAssignment(pass *analysis.Pass, lhs []ast.Expr, rhs 
 // jsonFuncCall reports, if expr is a call of one of the JSON encoding
 // functions checked by errchkjson.
 func jsonFuncCall(pass *analysis.Pass, expr ast.Expr) (*ast.CallExpr, string, jsonFunc, bool) {
-	ce, ok := expr.(*ast.CallExpr)
+	ce, ok := ast.Unparen(expr).(*ast.CallExpr)
 	if !ok {
 		return nil, "", jsonFunc{}, false
 	}
@@ -206,7 +237,7 @@ func (e *errchkjson) handleJSONMarshal(pass *analysis.Pass, ce *ast.CallExpr, fn
 			isPtr = true
 		}
 
-		err = e.jsonSafe(t, 0, newSafeState(jf.v2))
+		err = e.jsonSafe(t, 0, isPtr, newSafeState(jf.v2))
 		if jf.v2 && err != nil && safeConstantArgV2(pass, ce, jf, t) {
 			err = nil
 		}
@@ -337,45 +368,55 @@ type safeState struct {
 
 	// stack contains the named types and structs, which are currently being
 	// checked, with their position in the stack.
-	stack map[types.Type]int
+	stack map[safeKey]int
 	// results contains the results of the named types and structs, which
 	// have been checked already.
-	results map[types.Type]error
+	results map[safeKey]error
 	// low is the lowest position in the stack of a type, which has been
 	// reached again while it was being checked (recursion).
 	low int
 }
 
+// safeKey identifies the check of a type. A type is checked differently,
+// depending on whether a value of the type can be addressed, because
+// encoding/json calls marshaler methods declared on *T only for addressable
+// values.
+type safeKey struct {
+	t    types.Type
+	addr bool // a value of the type can be addressed.
+}
+
 func newSafeState(v2 bool) *safeState {
 	return &safeState{
 		v2:      v2,
-		stack:   map[types.Type]int{},
-		results: map[types.Type]error{},
+		stack:   map[safeKey]int{},
+		results: map[safeKey]error{},
 		low:     math.MaxInt,
 	}
 }
 
 // jsonSafe checks, if encoding a value of type t to JSON can fail. If
-// st.v2 is true, the rules of encoding/json/v2 are applied.
+// st.v2 is true, the rules of encoding/json/v2 are applied. The addr parameter
+// indicates whether the value being checked can be addressed.
 //
 // The returned error is nil (safe), an unsupported error (encoding fails for
 // all values of type t) or any other error (unsafe, encoding fails for some
 // values of type t).
-func (e *errchkjson) jsonSafe(t types.Type, level int, st *safeState) (err error) {
-	if pos, ok := st.stack[t]; ok {
+func (e *errchkjson) jsonSafe(t types.Type, level int, addr bool, st *safeState) (err error) {
+	// encoding/json/v2 always calls marshaler methods with a pointer receiver,
+	// the addressability of a value is therefore only relevant for
+	// encoding/json.
+	key := safeKey{t: t, addr: addr && !st.v2}
+	if pos, ok := st.stack[key]; ok {
 		// A type, which is currently being checked, is recursive (e.g.
 		// `type Node struct{ Next *Node }` or `type Tree map[string]Tree`).
-		// encoding/json/v2 fails for cyclic values and values exceeding the
-		// maximum nesting depth. For encoding/json, recursive types are
-		// considered safe for backwards compatibility (see
+		// encoding/json fails for cyclic values and, as of Go 1.27, for
+		// values exceeding the maximum nesting depth (see
 		// https://github.com/breml/errchkjson/issues/94).
 		st.low = min(st.low, pos)
-		if st.v2 {
-			return fmt.Errorf("unsafe recursive type `%s` found", t.String())
-		}
-		return nil
+		return fmt.Errorf("unsafe recursive type `%s` found", t.String())
 	}
-	if res, ok := st.results[t]; ok {
+	if res, ok := st.results[key]; ok {
 		return res
 	}
 	// Named types may be recursive without a struct being involved (e.g.
@@ -384,15 +425,15 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, st *safeState) (err error
 	_, isStruct := t.Underlying().(*types.Struct)
 	if isNamed || isStruct {
 		pos := len(st.stack)
-		st.stack[t] = pos
+		st.stack[key] = pos
 		outerLow := st.low
 		st.low = math.MaxInt
 		defer func() {
-			delete(st.stack, t)
+			delete(st.stack, key)
 			if st.low >= pos {
 				// The result does not depend on a type further up in the
 				// stack and can therefore be reused.
-				st.results[t] = err
+				st.results[key] = err
 				st.low = outerLow
 				return
 			}
@@ -400,7 +441,10 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, st *safeState) (err error
 		}()
 	}
 
-	if implementsMarshaler(t, st.v2) {
+	// encoding/json/v2 always calls marshaler methods with a pointer receiver,
+	// even if the value is not addressable. encoding/json calls them only for
+	// addressable values.
+	if implementsMarshaler(t, st.v2 || addr) {
 		return fmt.Errorf("unsafe type `%s` found", t.String())
 	}
 
@@ -443,31 +487,35 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, st *safeState) (err error
 			// element type.
 			return nil
 		}
-		return e.jsonSafe(ut.Elem(), level+1, st)
+		// The elements of an array can be addressed if the array can be.
+		return e.jsonSafe(ut.Elem(), level+1, addr, st)
 
 	case *types.Slice:
 		// nil and empty slices are encoded without considering the element
 		// type.
-		return demoteUnsupported(e.jsonSafe(ut.Elem(), level+1, st))
+		// The elements of a slice can always be addressed.
+		return demoteUnsupported(e.jsonSafe(ut.Elem(), level+1, true, st))
 
 	case *types.Struct:
 		if st.v2 {
-			return e.jsonSafeStructV2(t, ut, level, st)
+			return e.jsonSafeStructV2(t, ut, level, addr, st)
 		}
-		return e.jsonSafeStruct(ut, level, st)
+		return e.jsonSafeStruct(ut, level, addr, st)
 
 	case *types.Pointer:
-		// A nil pointer is encoded as null.
-		return demoteUnsupported(e.jsonSafe(ut.Elem(), level+1, st))
+		// A nil pointer is encoded as null. The pointed to value can be
+		// addressed.
+		return demoteUnsupported(e.jsonSafe(ut.Elem(), level+1, true, st))
 
 	case *types.Map:
 		// nil and empty maps are encoded without considering the key type
-		// (as of Go 1.27 for encoding/json) and the element type.
+		// (as of Go 1.27 for encoding/json) and the element type. Map keys
+		// and values can not be addressed.
 		err := demoteUnsupported(jsonSafeMapKey(ut.Key(), st.v2))
 		if err != nil {
 			return err
 		}
-		return demoteUnsupported(e.jsonSafe(ut.Elem(), level+1, st))
+		return demoteUnsupported(e.jsonSafe(ut.Elem(), level+1, false, st))
 
 	case *types.Chan, *types.Signature:
 		// Types that are not supported for encoding to json:
@@ -480,36 +528,31 @@ func (e *errchkjson) jsonSafe(t types.Type, level int, st *safeState) (err error
 }
 
 // jsonSafeStruct checks the struct ut according to the rules of encoding/json.
-func (e *errchkjson) jsonSafeStruct(ut *types.Struct, level int, st *safeState) error {
+func (e *errchkjson) jsonSafeStruct(ut *types.Struct, level int, addr bool, st *safeState) error {
 	exported := 0
-	var firstErr error
+	var firstUnsafe error
 	for i := range ut.NumFields() {
-		err := e.jsonSafeField(ut, i, level, st)
+		err := e.jsonSafeField(ut, i, level, addr, st)
 		if err == nil {
 			if ut.Field(i).Exported() && !ignoredField(ut, i) {
 				exported++
 			}
 			continue
 		}
+		// Unsupported types take precedence over unsafe types, independent of
+		// the order of the fields (matching encoding/json, which reports an
+		// unsupported type even if an earlier field is only unsafe for some
+		// values). Otherwise, the first unsafe field (in field order) is
+		// reported.
 		if isUnsupported(err) {
 			return err
 		}
-		if firstErr != nil {
-			continue
+		if firstUnsafe == nil {
+			firstUnsafe = err
 		}
-		// For backwards compatibility, the check stops at the first unsafe
-		// field. If the field is unsafe only because nil and empty values
-		// of an unsupported type are encoded without error (e.g. a nil
-		// slice of channels), the remaining fields are checked for
-		// unsupported types, because such a field has been considered as
-		// unsupported before.
-		if !isDemoted(err) {
-			return err
-		}
-		firstErr = err
 	}
-	if firstErr != nil {
-		return firstErr
+	if firstUnsafe != nil {
+		return firstUnsafe
 	}
 	if e.reportNoExported && level == 0 && exported == 0 {
 		return newNoexportedError(fmt.Errorf("struct does not export any field"))
@@ -525,7 +568,7 @@ func ignoredField(ut *types.Struct, i int) bool {
 
 // jsonSafeField checks the i-th field of the struct ut according to the rules
 // of encoding/json.
-func (e *errchkjson) jsonSafeField(ut *types.Struct, i int, level int, st *safeState) error {
+func (e *errchkjson) jsonSafeField(ut *types.Struct, i int, level int, addr bool, st *safeState) error {
 	field := ut.Field(i)
 	tag := reflect.StructTag(ut.Tag(i)).Get("json")
 	if tag == "-" {
@@ -542,6 +585,13 @@ func (e *errchkjson) jsonSafeField(ut *types.Struct, i int, level int, st *safeS
 		if field.Embedded() && hasFormat && name != "" && isStruct(field.Type()) && !unexportedMethodsV2(field.Type(), slices.Contains(options, "omitzero")) {
 			return fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
 		}
+		// encoding/json encodes the exported fields promoted from an
+		// embedded struct of an unexported type (see
+		// https://github.com/breml/errchkjson/issues/93). Embedded fields of
+		// unexported types, which are not structs, are ignored.
+		if field.Embedded() && isStruct(field.Type()) {
+			return e.jsonSafe(field.Type(), level+1, addr, st)
+		}
 		return nil
 	}
 
@@ -556,7 +606,7 @@ func (e *errchkjson) jsonSafeField(ut *types.Struct, i int, level int, st *safeS
 		tagErr = fmt.Errorf("unsafe struct tag option `%s` on field `%s` found", option, field.Name())
 	}
 
-	err := e.jsonSafe(field.Type(), level+1, st)
+	err := e.jsonSafe(field.Type(), level+1, addr, st)
 	if slices.Contains(options, "omitzero") {
 		// As of Go 1.24, the zero value is omitted without encoding it.
 		err = demoteUnsupported(err)
@@ -611,7 +661,7 @@ type pathError struct {
 // resulting fields is checked. An embedded struct, which has been visited
 // already, is not visited again, therefore embedding a struct in itself (e.g.
 // `type T struct{ *T }`) is not recursive.
-func (e *errchkjson) jsonSafeStructV2(t types.Type, ut *types.Struct, level int, st *safeState) error {
+func (e *errchkjson) jsonSafeStructV2(t types.Type, ut *types.Struct, level int, addr bool, st *safeState) error {
 	var errs []pathError
 	var fields []fieldV2
 	var root structState
@@ -670,7 +720,7 @@ func (e *errchkjson) jsonSafeStructV2(t types.Type, ut *types.Struct, level int,
 	}
 
 	for _, f := range dominantFieldsV2(fields) {
-		err := e.jsonSafe(f.field.Type(), level+1, st)
+		err := e.jsonSafe(f.field.Type(), level+1, addr, st)
 		if f.options["omitzero"] || f.viaPtr {
 			// The zero value of a field with the `omitzero` option is
 			// omitted and fields promoted from a nil embedded pointer are
@@ -1427,31 +1477,54 @@ func implementsIsZero(t types.Type) bool {
 	return types.Implements(t, isZeroer) || types.Implements(types.NewPointer(t), isZeroer)
 }
 
+// inspectArgs inspects the arguments of a call, where the arguments are used
+// as values. Function literals passed as arguments are inspected like any
+// other code.
 func (e *errchkjson) inspectArgs(pass *analysis.Pass, args []ast.Expr) {
 	for _, a := range args {
 		ast.Inspect(a, func(n ast.Node) bool {
 			if n == nil {
 				return true
 			}
-
-			ce, ok := n.(*ast.CallExpr)
-			if !ok {
-				return false
-			}
-
-			fn, _ := typeutil.Callee(pass.TypesInfo, ce).(*types.Func)
-			if fn == nil {
-				return true
-			}
-
-			if jf, ok := jsonFuncs[fn.FullName()]; ok {
-				e.handleJSONMarshal(pass, ce, fn.FullName(), jf, functionArgument)
-			} else {
-				e.inspectArgs(pass, ce.Args)
-			}
-			return false
+			return e.inspect(pass, n)
 		})
 	}
+}
+
+// inspectReturn inspects the returned expressions of a return statement. The
+// error returned by a JSON call is the caller's responsibility, the call itself
+// is therefore not checked, but its arguments and any function literal are.
+func (e *errchkjson) inspectReturn(pass *analysis.Pass, n *ast.ReturnStmt) {
+	for _, result := range n.Results {
+		if ce, _, _, ok := jsonFuncCall(pass, result); ok {
+			e.inspectArgs(pass, ce.Args)
+			continue
+		}
+		ast.Inspect(result, func(n ast.Node) bool {
+			if n == nil {
+				return true
+			}
+			return e.inspect(pass, n)
+		})
+	}
+}
+
+// inspectDiscardedCall inspects a deferred or go statement, where the error of
+// the call is discarded. The function of the call may be a function literal,
+// whose body is inspected like any other code.
+func (e *errchkjson) inspectDiscardedCall(pass *analysis.Pass, call *ast.CallExpr) {
+	if ce, fnName, jf, ok := jsonFuncCall(pass, call); ok {
+		e.handleJSONMarshal(pass, ce, fnName, jf, blankIdentifier)
+		e.inspectArgs(pass, ce.Args)
+		return
+	}
+	ast.Inspect(call.Fun, func(n ast.Node) bool {
+		if n == nil {
+			return true
+		}
+		return e.inspect(pass, n)
+	})
+	e.inspectArgs(pass, call.Args)
 }
 
 // Construct *types.Interface for interface encoding.TextMarshaler
