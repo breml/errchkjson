@@ -1238,13 +1238,13 @@ func JSONv2MarshalUnsupportedPrecedence() {
 	_, err = json.Marshal(tagBeforeChan) // want "`encoding/json/v2.Marshal` for unsupported type `chan int` found"
 	_ = err
 
-	// encoding/json reports the first unsafe field (unchanged behavior, known
-	// false negative).
+	// encoding/json reports unsupported types, even if an earlier field is
+	// only unsafe for some values.
 	var floatBeforeChan struct {
 		F float64
 		C chan int
 	}
-	_, err = stdjson.Marshal(floatBeforeChan) // err is checked
+	_, err = stdjson.Marshal(floatBeforeChan) // want "`encoding/json.Marshal` for unsupported type `chan int` found"
 	_ = err
 }
 
@@ -1383,9 +1383,10 @@ func JSONv2MarshalRecursiveTypes() {
 	_, err = json.Marshal(ri) // want "Error return value of `encoding/json/v2.Marshal` is checked but passed argument is safe"
 	_ = err
 
-	// encoding/json is unchanged (known false negative, see
-	// https://github.com/breml/errchkjson/issues/94).
-	_, err = stdjson.Marshal(n) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	// Recursive types are unsafe for encoding/json as well, see
+	// https://github.com/breml/errchkjson/issues/94.
+	_, _ = stdjson.Marshal(n)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe recursive type `jsonv2.node` found"
+	_, err = stdjson.Marshal(n) // err is checked
 	_ = err
 }
 
@@ -1770,4 +1771,48 @@ func JSONv2MarshalConstants() {
 	// For backwards compatibility, constants are not considered for
 	// encoding/json.
 	_, _ = stdjson.Marshal(1.5) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+}
+
+// runFuncV2 calls the passed function.
+func runFuncV2(f func()) { f() }
+
+// JSONv2MarshalFuncLit contains test cases for JSON calls inside function
+// literals (see https://github.com/breml/errchkjson/issues/95).
+func JSONv2MarshalFuncLit(w io.Writer) {
+	var f float64
+
+	runFuncV2(func() {
+		_, _ = json.Marshal(f) // want "Error return value of `encoding/json/v2.Marshal` is not checked: unsafe type `float64` found"
+	})
+
+	runFuncV2(func() {
+		_ = json.MarshalWrite(w, f) // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: unsafe type `float64` found"
+	})
+
+	defer func() {
+		enc := jsontext.NewEncoder(w)
+		_ = json.MarshalEncode(enc, f) // want "Error return value of `encoding/json/v2.MarshalEncode` is not checked: unsafe type `float64` found"
+	}()
+}
+
+// JSONv2MarshalErrorUsed contains test cases, where the error of a JSON call
+// is used, but not assigned to a variable or passed as argument (see
+// https://github.com/breml/errchkjson/issues/96).
+func JSONv2MarshalErrorUsed(w io.Writer) {
+	enc := jsontext.NewEncoder(w)
+	var f float64
+	var errs []error
+	ch := make(chan error, 1)
+
+	if json.MarshalWrite(w, f) != nil { // the error is compared
+		return
+	}
+	errs = append(errs, json.MarshalWrite(w, f)) // the error is stored
+	ch <- json.MarshalWrite(w, f)                // the error is sent
+	_ = map[string]error{"a": json.MarshalEncode(enc, f)}
+	_ = errs
+
+	// The error is discarded.
+	json.MarshalWrite(w, f)       // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: unsafe type `float64` found"
+	defer json.MarshalWrite(w, f) // want "Error return value of `encoding/json/v2.MarshalWrite` is not checked: unsafe type `float64` found"
 }

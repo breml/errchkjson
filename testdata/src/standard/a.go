@@ -707,13 +707,15 @@ func JSONMarshalGo127() {
 	_, err = json.Marshal(v2OnlyTags) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
 	_ = err
 
-	// Embedded structs of unexported types are not inspected for
-	// encoding/json (known false negative, kept for backwards compatibility).
+	// The exported fields promoted from an embedded struct of an unexported
+	// type are encoded by encoding/json (see
+	// https://github.com/breml/errchkjson/issues/93).
 	var v2OnlyEmbedded struct {
 		embeddedUnexportedFloat
 		B int
 	}
-	_, err = json.Marshal(v2OnlyEmbedded) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_, _ = json.Marshal(v2OnlyEmbedded)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	_, err = json.Marshal(v2OnlyEmbedded) // err is checked
 	_ = err
 
 	// Multi-value arguments are not expanded for encoding/json.
@@ -809,25 +811,27 @@ type recursivePtr *recursivePtr
 // JSONMarshalRecursiveTypes contains test cases for recursive types, which
 // are not structs.
 //
-// Recursive types are considered safe for encoding/json, although encoding
+// Recursive types are considered unsafe for encoding/json, because encoding
 // fails for cyclic values and, as of Go 1.27, for values with a nesting depth
-// larger than 10000 (known false negative, kept for backwards compatibility,
-// see https://github.com/breml/errchkjson/issues/94). For recursivePtr, a
-// cyclic value leads to a stack overflow as of Go 1.27 (see
+// larger than 10000 (see https://github.com/breml/errchkjson/issues/94). For
+// recursivePtr, a cyclic value leads to a stack overflow as of Go 1.27 (see
 // https://go.dev/issue/82947).
 func JSONMarshalRecursiveTypes() {
 	var err error
 
 	var m recursiveMap
-	_, err = json.Marshal(m) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_, _ = json.Marshal(m)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe recursive type `standard.recursiveMap` found"
+	_, err = json.Marshal(m) // err is checked
 	_ = err
 
 	var s recursiveSlice
-	_, err = json.Marshal(s) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_, _ = json.Marshal(s)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe recursive type `standard.recursiveSlice` found"
+	_, err = json.Marshal(s) // err is checked
 	_ = err
 
 	var p recursivePtr
-	_, err = json.Marshal(p) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_, _ = json.Marshal(p)   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe recursive type `standard.recursivePtr` found"
+	_, err = json.Marshal(p) // err is checked
 	_ = err
 }
 
@@ -846,8 +850,10 @@ func JSONMarshalAssignments() {
 	_ = errVar
 
 	// For backwards compatibility, var declarations are not handled for
-	// encoding/json.Marshal (known false positive).
-	var _, errMarshal = json.Marshal(f) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	// encoding/json.Marshal. The error is assigned to a variable, therefore
+	// the call is not reported as not checked (see
+	// https://github.com/breml/errchkjson/issues/96).
+	var _, errMarshal = json.Marshal(f)
 	_ = errMarshal
 }
 
@@ -975,14 +981,14 @@ func JSONMarshalNilValues() {
 	_, err = json.Marshal(sliceBeforeFloat) // err is checked
 	_ = err
 
-	// For backwards compatibility, the check stops at the first unsafe field
-	// otherwise (known false negative).
+	// An unsupported type is reported, even if an earlier field is only
+	// unsafe for some values.
 	var floatBeforeSliceAndChan struct {
 		F float64
 		S []chan int
 		C chan int
 	}
-	_, err = json.Marshal(floatBeforeSliceAndChan) // err is checked
+	_, err = json.Marshal(floatBeforeSliceAndChan) // want "`encoding/json.Marshal` for unsupported type `chan int` found"
 	_ = err
 
 	// An unsupported type takes precedence over an unsafe struct tag.
@@ -991,4 +997,157 @@ func JSONMarshalNilValues() {
 	}
 	_, err = json.Marshal(formatChan) // want "`encoding/json.Marshal` for unsupported type `chan int` found"
 	_ = err
+}
+
+// pointerReceiverJSON implements encoding/json.Marshaler with a pointer
+// receiver. encoding/json only calls such methods for addressable values (see
+// https://github.com/breml/errchkjson/issues/92).
+type pointerReceiverJSON struct {
+	A int
+}
+
+func (*pointerReceiverJSON) MarshalJSON() ([]byte, error) { return []byte(`"prj"`), nil }
+
+// pointerReceiverText implements encoding.TextMarshaler with a pointer
+// receiver.
+type pointerReceiverText struct {
+	A int
+}
+
+func (*pointerReceiverText) MarshalText() ([]byte, error) { return []byte(`prt`), nil }
+
+// JSONMarshalAddressable contains test cases for marshaler methods declared on
+// a pointer receiver, which encoding/json only calls for addressable values.
+func JSONMarshalAddressable() {
+	var err error
+
+	var v pointerReceiverJSON
+	// A value, which is not addressable, is encoded without calling the
+	// method of the pointer receiver.
+	_, err = json.Marshal(v) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+	_, _ = json.Marshal(&v) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `standard.pointerReceiverJSON` found"
+
+	// The elements of a slice are always addressable.
+	_, _ = json.Marshal([]pointerReceiverJSON{{}}) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `standard.pointerReceiverJSON` found"
+
+	// The elements of an array are addressable if the array can be addressed.
+	_, err = json.Marshal([1]pointerReceiverJSON{}) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+	_, _ = json.Marshal(&[1]pointerReceiverJSON{}) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `standard.pointerReceiverJSON` found"
+
+	// Map values can not be addressed.
+	_, err = json.Marshal(map[int]pointerReceiverJSON{0: {}}) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// Struct fields are addressable if the struct can be addressed.
+	var s struct{ F pointerReceiverJSON }
+	_, err = json.Marshal(s) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+	_, _ = json.Marshal(&s) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `standard.pointerReceiverJSON` found"
+
+	// A pointer to a value is addressable, regardless of the enclosing type.
+	var p struct{ F *pointerReceiverJSON }
+	_, _ = json.Marshal(p) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `\\*standard.pointerReceiverJSON` found"
+
+	// Other marshaler interfaces declared on a pointer receiver behave the
+	// same way.
+	var t pointerReceiverText
+	_, err = json.Marshal(t) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+	_, _ = json.Marshal(&t) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `standard.pointerReceiverText` found"
+}
+
+// runFunc calls the passed function.
+func runFunc(f func()) { f() }
+
+// returnedFuncLit returns a function literal.
+func returnedFuncLit() func() {
+	return func() {
+		_, _ = json.Marshal(1.5) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	}
+}
+
+// JSONMarshalFuncLit contains test cases for JSON calls inside function
+// literals, which are passed as arguments, returned or deferred (see
+// https://github.com/breml/errchkjson/issues/95).
+func JSONMarshalFuncLit() {
+	runFunc(func() {
+		_, _ = json.Marshal(1.5) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	})
+
+	go func() {
+		_, _ = json.Marshal(1.5) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	}()
+
+	defer func() {
+		_, _ = json.Marshal(1.5) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	}()
+
+	_ = returnedFuncLit()
+
+	_ = func() {
+		_, _ = json.Marshal(1.5) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	}
+}
+
+// JSONMarshalErrorUsed contains test cases, where the error of a JSON call is
+// used, but not assigned to a variable or passed as argument (see
+// https://github.com/breml/errchkjson/issues/96).
+func JSONMarshalErrorUsed() {
+	enc := json.NewEncoder(ioutil.Discard)
+	var errs []error
+	ch := make(chan error, 1)
+
+	if enc.Encode(1) != nil { // the error is compared
+		return
+	}
+	switch enc.Encode(1) { // the error is used as switch tag
+	case nil:
+	}
+	errs = append(errs, enc.Encode(1))       // the error is stored
+	ch <- enc.Encode(1)                      // the error is sent
+	_ = map[string]error{"a": enc.Encode(1)} // the error is stored in a map
+	_ = errs
+
+	// The error is discarded.
+	enc.Encode(1)       // want "Error return value of `\\(\\*encoding/json.Encoder\\).Encode` is not checked"
+	defer enc.Encode(1) // want "Error return value of `\\(\\*encoding/json.Encoder\\).Encode` is not checked"
+	go enc.Encode(1)    // want "Error return value of `\\(\\*encoding/json.Encoder\\).Encode` is not checked"
+}
+
+type embeddedSafe struct {
+	I int
+}
+
+type embeddedUnexportedAny struct {
+	V any
+}
+
+// JSONMarshalEmbeddedUnexported contains test cases for the exported fields
+// promoted from embedded structs of unexported types (see
+// https://github.com/breml/errchkjson/issues/93).
+func JSONMarshalEmbeddedUnexported() {
+	var err error
+
+	_, _ = json.Marshal(struct{ embeddedUnexportedFloat }{})  // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	_, _ = json.Marshal(struct{ *embeddedUnexportedFloat }{}) // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	_, _ = json.Marshal(embeddedWithName{})                   // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `float64` found"
+	_, _ = json.Marshal(struct{ embeddedUnexportedAny }{})    // want "Error return value of `encoding/json.Marshal` is not checked: unsafe type `any` found"
+
+	// An embedded struct with safe fields only is safe.
+	_, err = json.Marshal(struct{ embeddedSafe }{}) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+
+	// An embedded struct, which is omitted, is not checked.
+	_, err = json.Marshal(embeddedOmitted{}) // want "Error return value of `encoding/json.Marshal` is checked but passed argument is safe"
+	_ = err
+}
+
+type embeddedWithName struct {
+	embeddedUnexportedFloat `json:"in"`
+}
+
+type embeddedOmitted struct {
+	embeddedUnexportedFloat `json:"-"`
 }
